@@ -1,3 +1,5 @@
+import { isMobileDevice } from '../utils/deviceUtils';
+
 export class UIManager {
   private container: HTMLDivElement;
   private interactionPrompt: HTMLDivElement;
@@ -49,7 +51,6 @@ export class UIManager {
     // Vehicle Speedometer HUD
     this.hud = document.createElement('div');
     this.hud.id = 'vehicle-hud';
-    this.applyHUDStyles();
     
     this.vehicleNameElement = document.createElement('div');
     this.vehicleNameElement.innerText = 'VEHICLE';
@@ -84,7 +85,7 @@ export class UIManager {
     this.hud.appendChild(speedRow);
 
     this.exitHint = document.createElement('div');
-    this.exitHint.innerText = '[E] / 🚪 Exit';
+    this.exitHint.innerText = isMobileDevice() ? 'Tap 🚪 Exit' : '[E] Exit Vehicle';
     this.exitHint.style.fontSize = '11px';
     this.exitHint.style.marginTop = '4px';
     this.exitHint.style.color = '#cbd5e1';
@@ -92,11 +93,14 @@ export class UIManager {
 
     this.container.appendChild(this.hud);
 
+    this.applyHUDStyles();
+
     window.addEventListener('resize', () => this.applyHUDStyles());
   }
 
   private applyHUDStyles() {
-    const isMobile = window.innerWidth <= 768 || ('ontouchstart' in window);
+    const isMobile = isMobileDevice();
+    this.exitHint.innerText = isMobile ? 'Tap 🚪 Exit' : '[E] Exit Vehicle';
 
     if (isMobile) {
       // Top Center on Mobile (below voice / global HUD)

@@ -7,6 +7,8 @@ import { SimplePhysics } from '../physics/SimplePhysics';
 import { getMTV } from '../physics/Collision2D';
 import type { OBB2D } from '../physics/Collision2D';
 
+import { isMobileDevice } from '../utils/deviceUtils';
+
 export class InteractionManager {
   private player: Player;
   private vehicles: BaseVehicle[];
@@ -50,6 +52,7 @@ export class InteractionManager {
       }
 
       if (closestVehicle) {
+        const isMobile = isMobileDevice();
         const config = closestVehicle.getConfig();
         const maxSeats = 1 + (config.passengerSeats ? config.passengerSeats.length : 0);
         const hasDriver = closestVehicle.occupants.has(0);
@@ -64,7 +67,8 @@ export class InteractionManager {
 
         if (hasDriver) {
           if (firstEmptyPassengerSeat !== -1) {
-            this.uiManager.showInteractionPrompt("Press E to Enter (Passenger)");
+            const prompt = isMobile ? "Tap 🚪 Ride (Passenger)" : "Press E to Enter (Passenger)";
+            this.uiManager.showInteractionPrompt(prompt);
             if (inputManager.consumeInteract() && this.interactCooldown <= 0) {
               this.player.enterVehicle(closestVehicle, firstEmptyPassengerSeat);
               this.uiManager.hideInteractionPrompt();
@@ -75,7 +79,8 @@ export class InteractionManager {
           }
         } else {
           if (firstEmptyPassengerSeat !== -1) {
-            this.uiManager.showInteractionPrompt("Press E to Drive | F to Enter");
+            const prompt = isMobile ? "Tap 🚗 Drive | 🚪 Ride" : "Press E to Drive | F to Enter";
+            this.uiManager.showInteractionPrompt(prompt);
             if (inputManager.consumeInteract() && this.interactCooldown <= 0) {
               this.player.enterVehicle(closestVehicle, 0); // Driver
               this.uiManager.hideInteractionPrompt();
@@ -86,7 +91,8 @@ export class InteractionManager {
               this.interactCooldown = 1.0;
             }
           } else {
-            this.uiManager.showInteractionPrompt("Press E to Drive");
+            const prompt = isMobile ? "Tap 🚗 Drive" : "Press E to Drive";
+            this.uiManager.showInteractionPrompt(prompt);
             if (inputManager.consumeInteract() && this.interactCooldown <= 0) {
               this.player.enterVehicle(closestVehicle, 0); // Driver
               this.uiManager.hideInteractionPrompt();

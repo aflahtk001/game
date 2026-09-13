@@ -1,5 +1,6 @@
 import { NetworkManager } from '../network/NetworkManager';
 import type { ChatMessagePayload, ChatHistoryPayload } from '../network/networkTypes';
+import { isMobileDevice } from '../utils/deviceUtils';
 
 export class ChatUI {
   private container: HTMLDivElement;
@@ -53,7 +54,7 @@ export class ChatUI {
     this.inputField = document.createElement('input');
     this.inputField.id = 'chat-input';
     this.inputField.type = 'text';
-    this.inputField.placeholder = 'Type a message...';
+    this.inputField.placeholder = isMobileDevice() ? 'Type a message...' : 'Type a message... (Press Enter)';
     this.inputField.maxLength = 255;
 
     this.sendBtn = document.createElement('button');
@@ -79,7 +80,8 @@ export class ChatUI {
   }
 
   private applyStyles() {
-    const isMobile = window.innerWidth <= 768 || ('ontouchstart' in window);
+    const isMobile = isMobileDevice();
+    this.inputField.placeholder = isMobile ? 'Type a message...' : 'Type a message... (Press Enter)';
 
     // Floating Toggle Button
     Object.assign(this.toggleBtn.style, {
@@ -242,7 +244,7 @@ export class ChatUI {
   public closeChat(): void {
     this.isOpen = false;
     this.inputField.blur();
-    const isMobile = window.innerWidth <= 768 || ('ontouchstart' in window);
+    const isMobile = isMobileDevice();
     if (isMobile) {
       this.container.style.display = 'none';
       this.toggleBtn.style.display = 'flex';
@@ -280,7 +282,7 @@ export class ChatUI {
         this.networkManager.sendChatMessage(text);
         this.inputField.value = '';
       }
-      const isMobile = window.innerWidth <= 768 || ('ontouchstart' in window);
+      const isMobile = isMobileDevice();
       if (isMobile) {
         this.inputField.blur();
       }
@@ -310,7 +312,7 @@ export class ChatUI {
 
     // Network Events
     this.networkManager.on('world_joined', () => {
-      const isMobile = window.innerWidth <= 768 || ('ontouchstart' in window);
+      const isMobile = isMobileDevice();
       if (isMobile) {
         this.toggleBtn.style.display = 'flex';
       } else {
@@ -321,7 +323,7 @@ export class ChatUI {
     });
 
     this.networkManager.on('session_joined', () => {
-      const isMobile = window.innerWidth <= 768 || ('ontouchstart' in window);
+      const isMobile = isMobileDevice();
       if (isMobile) {
         this.toggleBtn.style.display = 'flex';
       } else {

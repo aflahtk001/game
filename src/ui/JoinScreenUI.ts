@@ -1,5 +1,6 @@
 import { NetworkManager } from '../network/NetworkManager';
 import type { VoiceManager } from '../network/VoiceManager';
+import { isMobileDevice } from '../utils/deviceUtils';
 
 export class JoinScreenUI {
   private overlay: HTMLDivElement;
@@ -9,6 +10,7 @@ export class JoinScreenUI {
   private joinBtn!: HTMLButtonElement;
   private errorMsg!: HTMLDivElement;
   private statusIndicator!: HTMLDivElement;
+  private controlsFooter!: HTMLDivElement;
   private onJoinSuccessCallback?: () => void;
 
   constructor(network: NetworkManager, voiceManager?: VoiceManager, onJoinSuccess?: () => void) {
@@ -207,9 +209,7 @@ export class JoinScreenUI {
         </button>
 
         <!-- Footer / Shortcuts Info -->
-        <div style="font-size: 11px; color: #64748b; line-height: 1.4;">
-          🎮 Controls: <strong>WASD</strong> Move/Drive • <strong>E</strong> Enter Car • <strong>F</strong> Passenger • <strong>Enter</strong> Chat • <strong>M</strong> Mic • <strong>N</strong> Speaker
-        </div>
+        <div id="join-controls-footer" style="font-size: 11px; color: #64748b; line-height: 1.4;"></div>
       </div>
     `;
 
@@ -217,12 +217,26 @@ export class JoinScreenUI {
     this.joinBtn = this.overlay.querySelector('#join-world-btn') as HTMLButtonElement;
     this.errorMsg = this.overlay.querySelector('#join-error-msg') as HTMLDivElement;
     this.statusIndicator = this.overlay.querySelector('#join-status-indicator') as HTMLDivElement;
+    this.controlsFooter = this.overlay.querySelector('#join-controls-footer') as HTMLDivElement;
+
+    this.updateControlsFooter();
+    window.addEventListener('resize', () => this.updateControlsFooter());
 
     // Focus input on load
     setTimeout(() => {
       this.nameInput.focus();
       this.nameInput.select();
     }, 100);
+  }
+
+  private updateControlsFooter(): void {
+    if (!this.controlsFooter) return;
+    const isMobile = isMobileDevice();
+    if (isMobile) {
+      this.controlsFooter.innerHTML = `📱 Controls: <strong>Virtual Joystick</strong> Move • <strong>Tap 🚗 / 🚪</strong> Drive/Ride • <strong>💬</strong> Chat • <strong>🎙️ / 🔊</strong> Voice`;
+    } else {
+      this.controlsFooter.innerHTML = `🎮 Controls: <strong>WASD</strong> Move/Drive • <strong>E</strong> Enter Car • <strong>F</strong> Passenger • <strong>Enter</strong> Chat • <strong>M</strong> Mic • <strong>N</strong> Speaker`;
+    }
   }
 
   private validateName(name: string): { valid: boolean; cleanName: string; error?: string } {

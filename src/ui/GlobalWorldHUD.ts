@@ -1,4 +1,5 @@
 import { NetworkManager } from '../network/NetworkManager';
+import { isMobileDevice } from '../utils/deviceUtils';
 
 export class GlobalWorldHUD {
   private container: HTMLDivElement;
@@ -9,6 +10,7 @@ export class GlobalWorldHUD {
   private playerCountText!: HTMLSpanElement;
   private playerListContainer!: HTMLDivElement;
   private toggleBtn!: HTMLButtonElement;
+  private shortcutsContainer!: HTMLDivElement;
 
   constructor(network: NetworkManager) {
     this.network = network;
@@ -50,6 +52,7 @@ export class GlobalWorldHUD {
     window.addEventListener('resize', () => {
       this.container.style.top = 'calc(12px + env(safe-area-inset-top, 0px))';
       this.container.style.left = 'calc(12px + env(safe-area-inset-left, 0px))';
+      this.updateShortcuts();
     });
 
     this.container.innerHTML = `
@@ -90,7 +93,7 @@ export class GlobalWorldHUD {
           color: #cbd5e1;
         "></div>
         
-        <div style="
+        <div id="hud-shortcuts" style="
           margin-top: 4px;
           padding-top: 6px;
           border-top: 1px solid rgba(255, 255, 255, 0.06);
@@ -99,11 +102,7 @@ export class GlobalWorldHUD {
           display: flex;
           flex-direction: column;
           gap: 2px;
-        ">
-          <span>• <strong>Enter</strong> Chat</span>
-          <span>• <strong>M</strong> Toggle Mic • <strong>N</strong> Toggle Speaker</span>
-          <span>• <strong>E / F</strong> Drive / Passenger</span>
-        </div>
+        "></div>
       </div>
     `;
 
@@ -111,9 +110,30 @@ export class GlobalWorldHUD {
     this.playerCountText = this.container.querySelector('#hud-player-count') as HTMLSpanElement;
     this.playerListContainer = this.container.querySelector('#hud-player-list') as HTMLDivElement;
     this.toggleBtn = this.container.querySelector('#hud-toggle-btn') as HTMLButtonElement;
+    this.shortcutsContainer = this.container.querySelector('#hud-shortcuts') as HTMLDivElement;
+
+    this.updateShortcuts();
 
     const header = this.container.querySelector('#hud-header') as HTMLDivElement;
     header.addEventListener('click', () => this.toggleCollapse());
+  }
+
+  private updateShortcuts(): void {
+    if (!this.shortcutsContainer) return;
+    const isMobile = isMobileDevice();
+    if (isMobile) {
+      this.shortcutsContainer.innerHTML = `
+        <span>• <strong>💬</strong> Chat Button</span>
+        <span>• <strong>🎙️ / 🔊</strong> Voice & Speaker Controls</span>
+        <span>• <strong>🚗 / 🚪</strong> Touch Action Controls</span>
+      `;
+    } else {
+      this.shortcutsContainer.innerHTML = `
+        <span>• <strong>Enter</strong> Chat</span>
+        <span>• <strong>M</strong> Toggle Mic • <strong>N</strong> Toggle Speaker</span>
+        <span>• <strong>E / F</strong> Drive / Passenger</span>
+      `;
+    }
   }
 
   private toggleCollapse(): void {
