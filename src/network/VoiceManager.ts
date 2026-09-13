@@ -22,9 +22,11 @@ export class VoiceManager {
   private audioNodes: Map<string, RemoteAudioPipeline> = new Map();
 
   public isMicEnabled: boolean = false;
+  public isSpeakerEnabled: boolean = true;
   public micState: MicState = 'disabled';
   private onSpeakingStateChange?: (playerId: string, isSpeaking: boolean) => void;
   public onMicStateChanged?: (state: MicState, errorMsg?: string) => void;
+  public onSpeakerStateChanged?: (enabled: boolean) => void;
 
   // Web Audio Context & Analysers
   private audioContext: AudioContext | null = null;
@@ -49,6 +51,7 @@ export class VoiceManager {
 
     // Unlock AudioContext on initial touch/click for mobile browsers
     const unlock = () => {
+      this.ensureAudioContext();
       this.unlockAudioContext();
       window.removeEventListener('click', unlock);
       window.removeEventListener('touchstart', unlock);
@@ -58,6 +61,9 @@ export class VoiceManager {
   }
 
   public unlockAudioContext(): void {
+    if (!this.audioContext) {
+      this.ensureAudioContext();
+    }
     if (this.audioContext && this.audioContext.state === 'suspended') {
       this.audioContext.resume().catch(() => {});
     }
@@ -83,6 +89,17 @@ export class VoiceManager {
 
   public setSpeakingStateCallback(cb: (playerId: string, isSpeaking: boolean) => void) {
     this.onSpeakingStateChange = cb;
+  }
+
+  public toggleSpeaker(): boolean {
+    this.isSpeakerEnabled = !this.isSpeakerEnabled;
+    this.onSpeakerStateChanged?.(this.isSpeakerEnabled);
+    return this.isSpeakerEnabled;
+  }
+
+  public setSpeakerEnabled(enabled: boolean): void {
+    this.isSpeakerEnabled = enabled;
+    this.onSpeakerStateChanged?.(this.isSpeakerEnabled);
   }
 
   public async toggleMic(): Promise<MicState> {
@@ -130,17 +147,18 @@ export class VoiceManager {
         audioTrack.enabled = true;
       }
 
-      // Ensure all connected world members have the track attached
-      const localId = this.networkManager.localPlayer?.id || '';
-      for (const remoteId of this.networkManager.activeWorldPlayers.keys()) {
-        if (remoteId !== localId) {
-          const pc = this.getOrCreatePeerConnection(remoteId);
+      // Attach active audio track to all peer connections without needing renegotiation
+      for (const pc of this.peerConnections.values()) {
+        if (pc.signalingState !== 'closed') {
           const senders = pc.getSenders();
-          const hasTrack = senders.some(sender => sender.track === audioTrack);
-          if (!hasTrack && audioTrack) {
-            pc.addTrack(audioTrack, this.localStream);
-            if (localId > remoteId) {
-              await this.initiateCall(remoteId);
+          const audioSender = senders.find(s => !s.track || s.track.kind === 'audio');
+          if (audioSender && audioTrack) {
+            audioSender.replaceTrack(audioTrack).catch(e => console.warn('[VoiceManager] replaceTrack error:', e));
+          } else if (audioTrack) {
+            try {
+              pc.addTrack(audioTrack, this.localStream);
+            } catch (e) {
+              console.warn('[VoiceManager] addTrack error:', e);
             }
           }
         }
@@ -318,6 +336,13 @@ export class VoiceManager {
       ]
     });
 
+    // Ensure audio transceiver is added so peer can ALWAYS receive remote audio even if local mic is currently off
+    try {
+      pc.addTransceiver('audio', { direction: 'sendrecv' });
+    } catch (e) {
+      console.warn('[VoiceManager] addTransceiver error:', e);
+    }
+
     pc.onicecandidate = (event) => {
       if (event.candidate) {
         this.networkManager.sendWebRTCSignal(playerId, event.candidate);
@@ -325,7 +350,7 @@ export class VoiceManager {
     };
 
     pc.ontrack = (event) => {
-      const stream = event.streams[0];
+      const stream = event.streams[0] || new MediaStream([event.track]);
       let audio = this.remoteAudios.get(playerId);
       if (!audio) {
         audio = document.createElement('audio');
@@ -350,7 +375,15 @@ export class VoiceManager {
     if (this.localStream) {
       const audioTrack = this.localStream.getAudioTracks()[0];
       if (audioTrack) {
-        pc.addTrack(audioTrack, this.localStream);
+        const senders = pc.getSenders();
+        const audioSender = senders.find(s => !s.track || s.track.kind === 'audio');
+        if (audioSender) {
+          audioSender.replaceTrack(audioTrack).catch(() => {});
+        } else {
+          try {
+            pc.addTrack(audioTrack, this.localStream);
+          } catch (_) {}
+        }
       }
     }
 
@@ -383,7 +416,7 @@ export class VoiceManager {
     }
   }
 
-  private ensureAudioContext() {
+  public ensureAudioContext() {
     if (!this.audioContext) {
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
     }
@@ -506,11 +539,13 @@ export class VoiceManager {
       const distance = speakerPos ? listenerPos.distanceTo(speakerPos) : 9999;
 
       // Calculate proximity volume attenuation:
+      // If speaker is disabled (deafened), volume is 0.0
+      // Otherwise:
       // - 0 to 5m: 100% full volume
       // - 5 to 15m: gradually reduced
       // - 15 to 25m: low volume
       // - > 25m: 0.0 (completely inaudible)
-      const targetVolume = calculateProximityVolume(distance, this.config);
+      const targetVolume = this.isSpeakerEnabled ? calculateProximityVolume(distance, this.config) : 0.0;
       nodes.gain.gain.setTargetAtTime(targetVolume, currentTime, 0.06);
 
       // Update 3D spatial panner position

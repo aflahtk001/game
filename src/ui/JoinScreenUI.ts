@@ -1,16 +1,19 @@
 import { NetworkManager } from '../network/NetworkManager';
+import type { VoiceManager } from '../network/VoiceManager';
 
 export class JoinScreenUI {
   private overlay: HTMLDivElement;
   private network: NetworkManager;
+  private voiceManager?: VoiceManager;
   private nameInput!: HTMLInputElement;
   private joinBtn!: HTMLButtonElement;
   private errorMsg!: HTMLDivElement;
   private statusIndicator!: HTMLDivElement;
   private onJoinSuccessCallback?: () => void;
 
-  constructor(network: NetworkManager, onJoinSuccess?: () => void) {
+  constructor(network: NetworkManager, voiceManager?: VoiceManager, onJoinSuccess?: () => void) {
     this.network = network;
+    this.voiceManager = voiceManager;
     this.onJoinSuccessCallback = onJoinSuccess;
 
     this.overlay = document.createElement('div');
@@ -205,7 +208,7 @@ export class JoinScreenUI {
 
         <!-- Footer / Shortcuts Info -->
         <div style="font-size: 11px; color: #64748b; line-height: 1.4;">
-          🎮 Controls: <strong>WASD</strong> Move/Drive • <strong>E</strong> Enter Car • <strong>F</strong> Passenger • <strong>Enter</strong> Chat • <strong>M</strong> Mic
+          🎮 Controls: <strong>WASD</strong> Move/Drive • <strong>E</strong> Enter Car • <strong>F</strong> Passenger • <strong>Enter</strong> Chat • <strong>M</strong> Mic • <strong>N</strong> Speaker
         </div>
       </div>
     `;
@@ -263,6 +266,12 @@ export class JoinScreenUI {
       this.showError(validation.error || 'Invalid name');
       return;
     }
+
+    // Unlock Web Audio immediately on user interaction gesture
+    try {
+      this.voiceManager?.ensureAudioContext();
+      this.voiceManager?.unlockAudioContext();
+    } catch (_) {}
 
     this.joinBtn.disabled = true;
     this.joinBtn.innerText = 'Joining World...';

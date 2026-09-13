@@ -68,11 +68,23 @@ export class Game {
 
     // Networking & UI Setup
     this.networkManager = new NetworkManager();
-    this.joinScreenUI = new JoinScreenUI(this.networkManager);
-    this.worldHUD = new GlobalWorldHUD(this.networkManager);
-    this.chatUI = new ChatUI(this.networkManager);
     this.voiceManager = new VoiceManager(this.networkManager);
     this.voiceUI = new VoiceUI(this.voiceManager);
+    this.joinScreenUI = new JoinScreenUI(this.networkManager, this.voiceManager);
+    this.worldHUD = new GlobalWorldHUD(this.networkManager);
+    this.chatUI = new ChatUI(this.networkManager);
+
+    // Keyboard Shortcuts for Voice Controls (M: Toggle Mic, N: Toggle Speaker)
+    window.addEventListener('keydown', (e) => {
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
+        return;
+      }
+      if (e.key.toLowerCase() === 'm') {
+        this.voiceManager.toggleMic();
+      } else if (e.key.toLowerCase() === 'n') {
+        this.voiceManager.toggleSpeaker();
+      }
+    });
 
     // Wire MobileControlsUI to HUD prompt and Chat UI state
     this.uiManager.onPromptChanged = (promptText) => {

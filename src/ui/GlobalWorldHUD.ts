@@ -101,7 +101,7 @@ export class GlobalWorldHUD {
           gap: 2px;
         ">
           <span>• <strong>Enter</strong> Chat</span>
-          <span>• <strong>M</strong> Toggle Voice Mic</span>
+          <span>• <strong>M</strong> Toggle Mic • <strong>N</strong> Toggle Speaker</span>
           <span>• <strong>E / F</strong> Drive / Passenger</span>
         </div>
       </div>

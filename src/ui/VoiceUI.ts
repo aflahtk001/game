@@ -14,6 +14,7 @@ export class VoiceUI {
   private container: HTMLDivElement;
   private headerBar: HTMLDivElement;
   private micBtn: HTMLButtonElement;
+  private speakerBtn: HTMLButtonElement;
   private toggleListBtn: HTMLButtonElement;
   private playerList: HTMLDivElement;
   private errorToast: HTMLDivElement;
@@ -28,6 +29,7 @@ export class VoiceUI {
     this.headerBar = document.createElement('div');
     this.playerList = document.createElement('div');
     this.micBtn = document.createElement('button');
+    this.speakerBtn = document.createElement('button');
     this.toggleListBtn = document.createElement('button');
     this.errorToast = document.createElement('div');
 
@@ -39,6 +41,10 @@ export class VoiceUI {
 
     this.voiceManager.onMicStateChanged = (state: MicState, errorMsg?: string) => {
       this.updateMicButtonState(state, errorMsg);
+    };
+
+    this.voiceManager.onSpeakerStateChanged = (enabled: boolean) => {
+      this.updateSpeakerButtonState(enabled);
     };
   }
 
@@ -64,7 +70,7 @@ export class VoiceUI {
     // Mic Button
     this.micBtn.textContent = '🔇 Mic: OFF';
     Object.assign(this.micBtn.style, {
-      padding: '8px 14px',
+      padding: '8px 12px',
       backgroundColor: 'rgba(239, 68, 68, 0.9)',
       color: '#ffffff',
       border: '1px solid rgba(255, 255, 255, 0.2)',
@@ -82,6 +88,29 @@ export class VoiceUI {
 
     this.micBtn.onclick = async () => {
       await this.voiceManager.toggleMic();
+    };
+
+    // Speaker Button (Deafen / Listen)
+    this.speakerBtn.textContent = '🔊 Speaker: ON';
+    Object.assign(this.speakerBtn.style, {
+      padding: '8px 12px',
+      backgroundColor: 'rgba(34, 197, 94, 0.95)',
+      color: '#ffffff',
+      border: '1px solid rgba(255, 255, 255, 0.2)',
+      borderRadius: '8px',
+      cursor: 'pointer',
+      fontWeight: '700',
+      fontSize: '12px',
+      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
+      backdropFilter: 'blur(8px)',
+      transition: 'all 0.15s ease',
+      userSelect: 'none',
+      webkitUserSelect: 'none',
+      touchAction: 'none'
+    });
+
+    this.speakerBtn.onclick = () => {
+      this.voiceManager.toggleSpeaker();
     };
 
     // Toggle Player List Button
@@ -108,6 +137,7 @@ export class VoiceUI {
     };
 
     this.headerBar.appendChild(this.micBtn);
+    this.headerBar.appendChild(this.speakerBtn);
     this.headerBar.appendChild(this.toggleListBtn);
 
     // Error Toast
@@ -186,6 +216,16 @@ export class VoiceUI {
         this.showErrorToast(errorMsg || 'Voice connection failed.');
         this.setPlayerMicStatus('local', false);
         break;
+    }
+  }
+
+  public updateSpeakerButtonState(enabled: boolean) {
+    if (enabled) {
+      this.speakerBtn.textContent = '🔊 Speaker: ON';
+      this.speakerBtn.style.backgroundColor = 'rgba(34, 197, 94, 0.95)';
+    } else {
+      this.speakerBtn.textContent = '🔇 Speaker: OFF';
+      this.speakerBtn.style.backgroundColor = 'rgba(239, 68, 68, 0.9)';
     }
   }
 
