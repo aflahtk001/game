@@ -29,6 +29,7 @@ export class VoiceManager {
 
   // ICE Candidate buffering
   private candidateQueues: Map<string, RTCIceCandidateInit[]> = new Map();
+  private makingOfferMap: Map<string, boolean> = new Map();
 
   constructor(networkManager: NetworkManager, initialConfig?: Partial<ProximityVoiceConfig>) {
     this.networkManager = networkManager;
@@ -98,7 +99,7 @@ export class VoiceManager {
       }
 
       // Ensure all connected world members have the track attached
-      const localId = this.networkManager.localPlayer?.id;
+      const localId = this.networkManager.localPlayer?.id || '';
       for (const remoteId of this.networkManager.activeWorldPlayers.keys()) {
         if (remoteId !== localId) {
           const pc = this.getOrCreatePeerConnection(remoteId);
@@ -106,7 +107,9 @@ export class VoiceManager {
           const hasTrack = senders.some(sender => sender.track === audioTrack);
           if (!hasTrack && audioTrack) {
             pc.addTrack(audioTrack, this.localStream);
-            await this.initiateCall(remoteId);
+            if (localId > remoteId) {
+              await this.initiateCall(remoteId);
+            }
           }
         }
       }
@@ -132,10 +135,10 @@ export class VoiceManager {
   }
 
   private async handleWorldJoined(payload: { activePlayers: Array<{ id: string }> }) {
-    const localId = this.networkManager.localPlayer?.id;
+    const localId = this.networkManager.localPlayer?.id || '';
     if (payload.activePlayers) {
       for (const remote of payload.activePlayers) {
-        if (remote.id !== localId) {
+        if (remote.id !== localId && localId > remote.id) {
           await this.initiateCall(remote.id);
         }
       }
@@ -143,9 +146,12 @@ export class VoiceManager {
   }
 
   private async handlePlayerJoined(payload: { player: { id: string } }) {
-    if (payload.player.id === this.networkManager.localPlayer?.id) return;
-    // Initiate WebRTC connection to new player (kept open throughout the world session)
-    await this.initiateCall(payload.player.id);
+    const localId = this.networkManager.localPlayer?.id || '';
+    if (payload.player.id === localId) return;
+    // Deterministic initiator tie-breaker: only one peer initiates per pair
+    if (localId > payload.player.id) {
+      await this.initiateCall(payload.player.id);
+    }
   }
 
   private handlePlayerLeft(payload: { playerId: string }) {
@@ -166,16 +172,25 @@ export class VoiceManager {
       this.speakingInterval = null;
     }
     this.candidateQueues.clear();
+    this.makingOfferMap.clear();
   }
 
   private async initiateCall(targetId: string) {
     const pc = this.getOrCreatePeerConnection(targetId);
+    if (pc.signalingState !== 'stable') {
+      return; // Negotiation already in progress
+    }
+
     try {
+      this.makingOfferMap.set(targetId, true);
       const offer = await pc.createOffer();
+      if (pc.signalingState !== 'stable') return;
       await pc.setLocalDescription(offer);
       this.networkManager.sendWebRTCSignal(targetId, offer);
     } catch (err) {
-      console.error('[VoiceManager] Error creating offer:', err);
+      console.warn('[VoiceManager] Error creating offer:', err);
+    } finally {
+      this.makingOfferMap.set(targetId, false);
     }
   }
 
@@ -183,21 +198,46 @@ export class VoiceManager {
     const { senderId, signal } = payload;
     if (!senderId) return;
 
+    const localId = this.networkManager.localPlayer?.id || '';
+    const isPolite = localId < senderId; // Deterministic tie-breaker
     const pc = this.getOrCreatePeerConnection(senderId);
 
     try {
       if (signal.type === 'offer') {
-        await pc.setRemoteDescription(new RTCSessionDescription(signal));
+        const isMakingOffer = this.makingOfferMap.get(senderId) || false;
+        const offerCollision = (pc.signalingState !== 'stable') || isMakingOffer;
+
+        if (offerCollision) {
+          if (!isPolite) {
+            // Impolite peer ignores colliding offer; polite peer will accept ours
+            return;
+          }
+          // Polite peer rolls back local offer to accept remote offer
+          await Promise.all([
+            pc.setLocalDescription({ type: 'rollback' } as any).catch(() => {}),
+            pc.setRemoteDescription(new RTCSessionDescription(signal))
+          ]);
+        } else {
+          await pc.setRemoteDescription(new RTCSessionDescription(signal));
+        }
+
         await this.flushCandidateQueue(senderId, pc);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         this.networkManager.sendWebRTCSignal(senderId, answer);
       } else if (signal.type === 'answer') {
-        await pc.setRemoteDescription(new RTCSessionDescription(signal));
-        await this.flushCandidateQueue(senderId, pc);
+        // Only set remote description if we are in have-local-offer state
+        if (pc.signalingState === 'have-local-offer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(signal));
+          await this.flushCandidateQueue(senderId, pc);
+        }
       } else if (signal.candidate) {
         if (pc.remoteDescription && pc.remoteDescription.type) {
-          await pc.addIceCandidate(new RTCIceCandidate(signal));
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(signal));
+          } catch (e) {
+            // Stale candidate ignored
+          }
         } else {
           if (!this.candidateQueues.has(senderId)) {
             this.candidateQueues.set(senderId, []);
@@ -206,7 +246,7 @@ export class VoiceManager {
         }
       }
     } catch (err) {
-      console.error('[VoiceManager] Error handling signal:', err);
+      console.warn('[VoiceManager] Handled signal with warning:', err);
     }
   }
 
