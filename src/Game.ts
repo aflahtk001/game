@@ -18,6 +18,7 @@ import { VoiceManager } from './network/VoiceManager';
 import { VoiceUI } from './ui/VoiceUI';
 import { MobileControlsUI } from './ui/MobileControlsUI';
 import { GraphicsSettingsManager } from './core/GraphicsSettingsManager';
+import { OrientationManager } from './ui/OrientationManager';
 
 export class Game {
   private container: HTMLElement;
@@ -43,6 +44,7 @@ export class Game {
   public remotePlayerManager: RemotePlayerManager;
   public mobileControlsUI: MobileControlsUI;
   public graphicsSettings: GraphicsSettingsManager;
+  public orientationManager: OrientationManager;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -65,12 +67,15 @@ export class Game {
     this.physics = new SimplePhysics();
     this.uiManager = new UIManager();
     this.mobileControlsUI = new MobileControlsUI(this.inputManager, this.cameraManager);
+    this.orientationManager = new OrientationManager((_isLandscape) => {
+      this.onWindowResize();
+    });
 
     // Networking & UI Setup
     this.networkManager = new NetworkManager();
     this.voiceManager = new VoiceManager(this.networkManager);
     this.voiceUI = new VoiceUI(this.voiceManager);
-    this.joinScreenUI = new JoinScreenUI(this.networkManager, this.voiceManager);
+    this.joinScreenUI = new JoinScreenUI(this.networkManager, this.voiceManager, this.orientationManager);
     this.worldHUD = new GlobalWorldHUD(this.networkManager);
     this.chatUI = new ChatUI(this.networkManager);
 

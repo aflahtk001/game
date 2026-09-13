@@ -1,11 +1,13 @@
 import { NetworkManager } from '../network/NetworkManager';
 import type { VoiceManager } from '../network/VoiceManager';
 import { isMobileDevice } from '../utils/deviceUtils';
+import type { OrientationManager } from './OrientationManager';
 
 export class JoinScreenUI {
   private overlay: HTMLDivElement;
   private network: NetworkManager;
   private voiceManager?: VoiceManager;
+  private orientationManager?: OrientationManager;
   private nameInput!: HTMLInputElement;
   private joinBtn!: HTMLButtonElement;
   private errorMsg!: HTMLDivElement;
@@ -13,9 +15,15 @@ export class JoinScreenUI {
   private controlsFooter!: HTMLDivElement;
   private onJoinSuccessCallback?: () => void;
 
-  constructor(network: NetworkManager, voiceManager?: VoiceManager, onJoinSuccess?: () => void) {
+  constructor(
+    network: NetworkManager, 
+    voiceManager?: VoiceManager, 
+    orientationManager?: OrientationManager,
+    onJoinSuccess?: () => void
+  ) {
     this.network = network;
     this.voiceManager = voiceManager;
+    this.orientationManager = orientationManager;
     this.onJoinSuccessCallback = onJoinSuccess;
 
     this.overlay = document.createElement('div');
@@ -285,6 +293,11 @@ export class JoinScreenUI {
     try {
       this.voiceManager?.ensureAudioContext();
       this.voiceManager?.unlockAudioContext();
+    } catch (_) {}
+
+    // Enforce Fullscreen Landscape on Mobile Devices
+    try {
+      this.orientationManager?.requestLandscapeFullscreen();
     } catch (_) {}
 
     this.joinBtn.disabled = true;
