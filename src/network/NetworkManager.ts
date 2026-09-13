@@ -18,8 +18,19 @@ export class NetworkManager {
   private listeners: Map<keyof NetworkEventMap, Set<Function>> = new Map();
 
   constructor(serverUrl?: string) {
-    const envUrl = (import.meta as any).env?.VITE_WS_SERVER_URL;
-    this.url = serverUrl || envUrl || 'ws://localhost:3001';
+    let rawUrl = serverUrl || (import.meta as any).env?.VITE_WS_SERVER_URL || 'ws://localhost:3001';
+    rawUrl = rawUrl.trim();
+
+    // Clean up duplicate or mismatched protocols (e.g. wss://https:// or https://)
+    rawUrl = rawUrl.replace(/^wss?:\/\/https?:\/\//i, 'wss://');
+    rawUrl = rawUrl.replace(/^https:\/\//i, 'wss://');
+    rawUrl = rawUrl.replace(/^http:\/\//i, 'ws://');
+
+    if (!rawUrl.startsWith('ws://') && !rawUrl.startsWith('wss://')) {
+      rawUrl = (typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss://' : 'ws://') + rawUrl;
+    }
+
+    this.url = rawUrl;
   }
 
   public getState(): NetworkConnectionState {
