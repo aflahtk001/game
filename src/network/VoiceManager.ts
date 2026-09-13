@@ -12,6 +12,14 @@ interface RemoteAudioPipeline {
 
 export type MicState = 'disabled' | 'enabled' | 'requesting' | 'denied' | 'error';
 
+function optimizeAudioSDP(sdp: string): string {
+  // Enforce low-latency, resilient Opus audio codec parameters
+  return sdp.replace(
+    /a=fmtp:111 ((?:(?!minptime).)*)\r\n/g,
+    'a=fmtp:111 $1;minptime=10;useinbandfec=1;stereo=0;sprop-stereo=0;cbr=1\r\n'
+  );
+}
+
 export class VoiceManager {
   private networkManager: NetworkManager;
   public config: ProximityVoiceConfig = { ...DEFAULT_PROXIMITY_CONFIG };
@@ -71,13 +79,11 @@ export class VoiceManager {
 
   public setConfig(newConfig: Partial<ProximityVoiceConfig>) {
     this.config = { ...this.config, ...newConfig };
-    // Update panners with new config if applicable
     if (this.audioNodes) {
       for (const node of this.audioNodes.values()) {
         if (node.panner) {
           node.panner.refDistance = this.config.minDistance;
           node.panner.maxDistance = this.config.maxDistance;
-          node.panner.rolloffFactor = this.config.rolloffFactor;
         }
       }
     }
@@ -121,13 +127,15 @@ export class VoiceManager {
       this.unlockAudioContext();
 
       if (!this.localStream) {
-        // Request microphone permission on first enable
+        // High-clarity, low-latency mono audio capture
         this.localStream = await navigator.mediaDevices.getUserMedia({
           audio: {
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true,
-          },
+            channelCount: 1,
+            sampleRate: 48000
+          } as MediaTrackConstraints,
           video: false,
         });
         this.setupLocalAnalyser(this.localStream);
@@ -147,18 +155,18 @@ export class VoiceManager {
         audioTrack.enabled = true;
       }
 
-      // Attach active audio track to all peer connections without needing renegotiation
+      // Seamlessly attach track to existing transceivers without adding duplicate tracks
       for (const pc of this.peerConnections.values()) {
         if (pc.signalingState !== 'closed') {
-          const senders = pc.getSenders();
-          const audioSender = senders.find(s => !s.track || s.track.kind === 'audio');
-          if (audioSender && audioTrack) {
-            audioSender.replaceTrack(audioTrack).catch(e => console.warn('[VoiceManager] replaceTrack error:', e));
-          } else if (audioTrack) {
-            try {
-              pc.addTrack(audioTrack, this.localStream);
-            } catch (e) {
-              console.warn('[VoiceManager] addTrack error:', e);
+          const audioTransceiver = pc.getTransceivers().find(
+            t => t.receiver.track.kind === 'audio' || t.sender.track?.kind === 'audio'
+          );
+          if (audioTransceiver && audioTransceiver.sender && audioTrack) {
+            audioTransceiver.sender.replaceTrack(audioTrack).catch(() => {});
+          } else {
+            const audioSender = pc.getSenders().find(s => !s.track || s.track.kind === 'audio');
+            if (audioSender && audioTrack) {
+              audioSender.replaceTrack(audioTrack).catch(() => {});
             }
           }
         }
@@ -188,6 +196,18 @@ export class VoiceManager {
       });
     }
 
+    // Stop sending audio packets to peers
+    for (const pc of this.peerConnections.values()) {
+      if (pc.signalingState !== 'closed') {
+        const audioTransceiver = pc.getTransceivers().find(
+          t => t.receiver.track.kind === 'audio' || t.sender.track?.kind === 'audio'
+        );
+        if (audioTransceiver && audioTransceiver.sender) {
+          audioTransceiver.sender.replaceTrack(null).catch(() => {});
+        }
+      }
+    }
+
     if (this.onSpeakingStateChange) {
       this.onSpeakingStateChange('local', false);
     }
@@ -208,7 +228,6 @@ export class VoiceManager {
   private async handlePlayerJoined(payload: { player: { id: string } }) {
     const localId = this.networkManager.localPlayer?.id || '';
     if (payload.player.id === localId) return;
-    // Deterministic initiator tie-breaker: only one peer initiates per pair
     if (localId > payload.player.id) {
       await this.initiateCall(payload.player.id);
     }
@@ -238,15 +257,20 @@ export class VoiceManager {
   private async initiateCall(targetId: string) {
     const pc = this.getOrCreatePeerConnection(targetId);
     if (pc.signalingState !== 'stable') {
-      return; // Negotiation already in progress
+      return;
     }
 
     try {
       this.makingOfferMap.set(targetId, true);
-      const offer = await pc.createOffer();
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true
+      });
       if (pc.signalingState !== 'stable') return;
-      await pc.setLocalDescription(offer);
-      this.networkManager.sendWebRTCSignal(targetId, offer);
+      
+      const optimizedSdp = optimizeAudioSDP(offer.sdp || '');
+      const desc = new RTCSessionDescription({ type: offer.type, sdp: optimizedSdp });
+      await pc.setLocalDescription(desc);
+      this.networkManager.sendWebRTCSignal(targetId, desc);
     } catch (err) {
       console.warn('[VoiceManager] Error creating offer:', err);
     } finally {
@@ -283,8 +307,10 @@ export class VoiceManager {
 
         await this.flushCandidateQueue(senderId, pc);
         const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        this.networkManager.sendWebRTCSignal(senderId, answer);
+        const optimizedAnswerSdp = optimizeAudioSDP(answer.sdp || '');
+        const desc = new RTCSessionDescription({ type: answer.type, sdp: optimizedAnswerSdp });
+        await pc.setLocalDescription(desc);
+        this.networkManager.sendWebRTCSignal(senderId, desc);
       } else if (signal.type === 'answer') {
         // Only set remote description if we are in have-local-offer state
         if (pc.signalingState === 'have-local-offer') {
@@ -336,9 +362,17 @@ export class VoiceManager {
       ]
     });
 
-    // Ensure audio transceiver is added so peer can ALWAYS receive remote audio even if local mic is currently off
+    const audioTrack = (this.isMicEnabled && this.localStream) ? this.localStream.getAudioTracks()[0] : null;
+
+    // Add exactly one audio transceiver for this peer
     try {
-      pc.addTransceiver('audio', { direction: 'sendrecv' });
+      const transceiver = pc.addTransceiver('audio', {
+        direction: 'sendrecv',
+        streams: this.localStream ? [this.localStream] : []
+      });
+      if (audioTrack && transceiver.sender) {
+        transceiver.sender.replaceTrack(audioTrack).catch(() => {});
+      }
     } catch (e) {
       console.warn('[VoiceManager] addTransceiver error:', e);
     }
@@ -350,17 +384,21 @@ export class VoiceManager {
     };
 
     pc.ontrack = (event) => {
-      const stream = event.streams[0] || new MediaStream([event.track]);
+      const track = event.track;
+      if (track.kind !== 'audio') return;
+
+      const stream = event.streams[0] || new MediaStream([track]);
       let audio = this.remoteAudios.get(playerId);
       if (!audio) {
         audio = document.createElement('audio');
         audio.autoplay = true;
-        audio.muted = true; // Muted in DOM so Web Audio API handles spatial/proximity volume!
+        audio.muted = true; // Kept muted so only Web Audio spatial graph emits sound (prevents double audio)
+        audio.setAttribute('playsinline', 'true');
         document.body.appendChild(audio);
         this.remoteAudios.set(playerId, audio);
       }
       audio.srcObject = stream;
-      audio.play().catch(e => console.warn('[VoiceManager] Autoplay error:', e));
+      audio.play().catch(() => {});
 
       // Setup Web Audio spatialization and proximity pipeline
       this.setupAudioPipeline(playerId, stream);
@@ -371,21 +409,6 @@ export class VoiceManager {
         this.removePeer(playerId);
       }
     };
-
-    if (this.localStream) {
-      const audioTrack = this.localStream.getAudioTracks()[0];
-      if (audioTrack) {
-        const senders = pc.getSenders();
-        const audioSender = senders.find(s => !s.track || s.track.kind === 'audio');
-        if (audioSender) {
-          audioSender.replaceTrack(audioTrack).catch(() => {});
-        } else {
-          try {
-            pc.addTrack(audioTrack, this.localStream);
-          } catch (_) {}
-        }
-      }
-    }
 
     this.peerConnections.set(playerId, pc);
     return pc;
@@ -435,8 +458,8 @@ export class VoiceManager {
     try {
       const source = this.audioContext.createMediaStreamSource(stream);
       const analyser = this.audioContext.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.4;
+      analyser.fftSize = 128;
+      analyser.smoothingTimeConstant = 0.3;
       source.connect(analyser);
       this.analysers.set('local', analyser);
     } catch (e) {
@@ -453,26 +476,26 @@ export class VoiceManager {
     try {
       const source = this.audioContext.createMediaStreamSource(stream);
 
-      // 1. Analyser on raw source (for accurate speaking indicator regardless of distance attenuation)
+      // 1. Analyser on raw source (for instant speaking indicator)
       const analyser = this.audioContext.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.4;
+      analyser.fftSize = 128;
+      analyser.smoothingTimeConstant = 0.3;
       source.connect(analyser);
       this.analysers.set(playerId, analyser);
 
-      // 2. Gain node for smooth distance attenuation and mute
+      // 2. Gain node for smooth distance attenuation & master volume
       const gain = this.audioContext.createGain();
       gain.gain.setValueAtTime(0.0, this.audioContext.currentTime);
 
-      // 3. 3D Spatial Panner Node
+      // 3. 3D Spatial Panner Node (using equalpower stereo panning to prevent pitch modulation / Doppler / comb distortion)
       let panner: PannerNode | undefined = undefined;
       if (this.config.spatialAudioEnabled && this.audioContext.createPanner) {
         panner = this.audioContext.createPanner();
-        panner.panningModel = 'HRTF';
-        panner.distanceModel = 'linear';
+        panner.panningModel = 'equalpower'; // Crystal clear stereo spatial panning without HRTF phase warp
+        panner.distanceModel = 'inverse';
         panner.refDistance = this.config.minDistance;
         panner.maxDistance = this.config.maxDistance;
-        panner.rolloffFactor = this.config.rolloffFactor;
+        panner.rolloffFactor = 0; // Volume attenuation is exclusively controlled by the GainNode
 
         source.connect(gain);
         gain.connect(panner);
@@ -518,15 +541,15 @@ export class VoiceManager {
     const listener = this.audioContext.listener;
     if (listener) {
       if (listener.positionX) {
-        listener.positionX.setTargetAtTime(listenerPos.x, currentTime, 0.05);
-        listener.positionY.setTargetAtTime(listenerPos.y, currentTime, 0.05);
-        listener.positionZ.setTargetAtTime(listenerPos.z, currentTime, 0.05);
-        listener.forwardX.setTargetAtTime(listenerForward.x, currentTime, 0.05);
-        listener.forwardY.setTargetAtTime(listenerForward.y, currentTime, 0.05);
-        listener.forwardZ.setTargetAtTime(listenerForward.z, currentTime, 0.05);
-        listener.upX.setTargetAtTime(0, currentTime, 0.05);
-        listener.upY.setTargetAtTime(1, currentTime, 0.05);
-        listener.upZ.setTargetAtTime(0, currentTime, 0.05);
+        listener.positionX.setTargetAtTime(listenerPos.x, currentTime, 0.04);
+        listener.positionY.setTargetAtTime(listenerPos.y, currentTime, 0.04);
+        listener.positionZ.setTargetAtTime(listenerPos.z, currentTime, 0.04);
+        listener.forwardX.setTargetAtTime(listenerForward.x, currentTime, 0.04);
+        listener.forwardY.setTargetAtTime(listenerForward.y, currentTime, 0.04);
+        listener.forwardZ.setTargetAtTime(listenerForward.z, currentTime, 0.04);
+        listener.upX.setTargetAtTime(0, currentTime, 0.04);
+        listener.upY.setTargetAtTime(1, currentTime, 0.04);
+        listener.upZ.setTargetAtTime(0, currentTime, 0.04);
       } else if ((listener as any).setPosition) {
         (listener as any).setPosition(listenerPos.x, listenerPos.y, listenerPos.z);
         (listener as any).setOrientation(listenerForward.x, listenerForward.y, listenerForward.z, 0, 1, 0);
@@ -538,22 +561,15 @@ export class VoiceManager {
       const speakerPos = speakerPositions.get(playerId);
       const distance = speakerPos ? listenerPos.distanceTo(speakerPos) : 9999;
 
-      // Calculate proximity volume attenuation:
-      // If speaker is disabled (deafened), volume is 0.0
-      // Otherwise:
-      // - 0 to 5m: 100% full volume
-      // - 5 to 15m: gradually reduced
-      // - 15 to 25m: low volume
-      // - > 25m: 0.0 (completely inaudible)
       const targetVolume = this.isSpeakerEnabled ? calculateProximityVolume(distance, this.config) : 0.0;
-      nodes.gain.gain.setTargetAtTime(targetVolume, currentTime, 0.06);
+      nodes.gain.gain.setTargetAtTime(targetVolume, currentTime, 0.04);
 
       // Update 3D spatial panner position
       if (nodes.panner && speakerPos && this.config.spatialAudioEnabled) {
         if (nodes.panner.positionX) {
-          nodes.panner.positionX.setTargetAtTime(speakerPos.x, currentTime, 0.05);
-          nodes.panner.positionY.setTargetAtTime(speakerPos.y, currentTime, 0.05);
-          nodes.panner.positionZ.setTargetAtTime(speakerPos.z, currentTime, 0.05);
+          nodes.panner.positionX.setTargetAtTime(speakerPos.x, currentTime, 0.04);
+          nodes.panner.positionY.setTargetAtTime(speakerPos.y, currentTime, 0.04);
+          nodes.panner.positionZ.setTargetAtTime(speakerPos.z, currentTime, 0.04);
         } else if ((nodes.panner as any).setPosition) {
           (nodes.panner as any).setPosition(speakerPos.x, speakerPos.y, speakerPos.z);
         }
