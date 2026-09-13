@@ -52,7 +52,7 @@ export class VoiceUI {
     this.headerBar.style.gap = '8px';
     this.headerBar.style.pointerEvents = 'auto';
 
-    this.micBtn.textContent = '?? Mic: OFF';
+    this.micBtn.textContent = '🎙️ Mic: OFF';
     this.micBtn.style.padding = '8px 14px';
     this.micBtn.style.backgroundColor = 'rgba(239, 68, 68, 0.9)';
     this.micBtn.style.color = '#ffffff';
@@ -84,11 +84,11 @@ export class VoiceUI {
 
   public updateLocalMicButton(isEnabled: boolean) {
     if (isEnabled) {
-      this.micBtn.textContent = '??? Mic: ON';
+      this.micBtn.textContent = '🎙️ Mic: ON';
       this.micBtn.style.backgroundColor = 'rgba(34, 197, 94, 0.9)';
       this.micBtn.style.color = '#ffffff';
     } else {
-      this.micBtn.textContent = '?? Mic: OFF';
+      this.micBtn.textContent = '🔇 Mic: OFF';
       this.micBtn.style.backgroundColor = 'rgba(239, 68, 68, 0.9)';
       this.micBtn.style.color = '#ffffff';
       this.micBtn.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.3)';

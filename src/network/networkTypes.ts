@@ -71,16 +71,27 @@ export interface WebRTCSignalPayload {
   signal: any;
 }
 
+export interface WorldPlayer {
+  id: string;
+  displayName: string;
+}
+
+export interface WorldJoinedPayload {
+  player: NetworkPlayer;
+  activePlayers: WorldPlayer[];
+}
+
 export interface NetworkEventMap {
   'connected': () => void;
   'disconnected': () => void;
+  'world_joined': (payload: WorldJoinedPayload) => void;
   'identified': (player: NetworkPlayer) => void;
   'session_created': (session: NetworkGameSession) => void;
   'session_joined': (session: NetworkGameSession) => void;
   'session_left': (sessionId: string) => void;
   'session_status': (session: NetworkGameSession) => void;
-  'player_joined': (payload: { sessionId: string; player: { id: string; displayName: string; role: string } }) => void;
-  'player_left': (payload: { sessionId: string; playerId: string; newHostId?: string | null }) => void;
+  'player_joined': (payload: { sessionId?: string; player: { id: string; displayName: string; role?: string } }) => void;
+  'player_left': (payload: { sessionId?: string; playerId: string; newHostId?: string | null }) => void;
   'update_state': (payload: StateUpdatePayload) => void;
   'chat_message': (payload: ChatMessagePayload) => void;
   'chat_history': (payload: ChatHistoryPayload) => void;

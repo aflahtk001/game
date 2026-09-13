@@ -37,6 +37,7 @@ export class VoiceManager {
     }
 
     this.networkManager.on('webrtc_signal', this.handleSignal.bind(this));
+    this.networkManager.on('world_joined', this.handleWorldJoined.bind(this));
     this.networkManager.on('player_joined', this.handlePlayerJoined.bind(this));
     this.networkManager.on('player_left', this.handlePlayerLeft.bind(this));
     this.networkManager.on('session_left', this.handleSessionLeft.bind(this));
@@ -96,19 +97,16 @@ export class VoiceManager {
         audioTrack.enabled = true;
       }
 
-      // Ensure all connected session members have the track attached
-      if (this.networkManager.currentSession) {
-        const localId = this.networkManager.localPlayer?.id;
-        const members = this.networkManager.currentSession.members || [];
-        for (const member of members) {
-          if (member.isActive && member.playerId !== localId) {
-            const pc = this.getOrCreatePeerConnection(member.playerId);
-            const senders = pc.getSenders();
-            const hasTrack = senders.some(sender => sender.track === audioTrack);
-            if (!hasTrack && audioTrack) {
-              pc.addTrack(audioTrack, this.localStream);
-              await this.initiateCall(member.playerId);
-            }
+      // Ensure all connected world members have the track attached
+      const localId = this.networkManager.localPlayer?.id;
+      for (const remoteId of this.networkManager.activeWorldPlayers.keys()) {
+        if (remoteId !== localId) {
+          const pc = this.getOrCreatePeerConnection(remoteId);
+          const senders = pc.getSenders();
+          const hasTrack = senders.some(sender => sender.track === audioTrack);
+          if (!hasTrack && audioTrack) {
+            pc.addTrack(audioTrack, this.localStream);
+            await this.initiateCall(remoteId);
           }
         }
       }
@@ -133,9 +131,20 @@ export class VoiceManager {
     }
   }
 
-  private async handlePlayerJoined(payload: { sessionId: string; player: { id: string } }) {
+  private async handleWorldJoined(payload: { activePlayers: Array<{ id: string }> }) {
+    const localId = this.networkManager.localPlayer?.id;
+    if (payload.activePlayers) {
+      for (const remote of payload.activePlayers) {
+        if (remote.id !== localId) {
+          await this.initiateCall(remote.id);
+        }
+      }
+    }
+  }
+
+  private async handlePlayerJoined(payload: { player: { id: string } }) {
     if (payload.player.id === this.networkManager.localPlayer?.id) return;
-    // Initiate WebRTC connection to new player (kept open throughout the session)
+    // Initiate WebRTC connection to new player (kept open throughout the world session)
     await this.initiateCall(payload.player.id);
   }
 

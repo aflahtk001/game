@@ -7,6 +7,8 @@ import {
   WSClientMessage,
   WSServerMessage,
   WSServerEvent,
+  JoinWorldPayload,
+  WorldJoinedPayload,
   IdentifyPayload,
   CreateSessionPayload,
   JoinSessionPayload,
@@ -48,6 +50,30 @@ export function sendWSError(
   sendWSMessage(socket, 'ERROR', { code, message }, requestId);
 }
 
+function sanitizeDisplayName(name: unknown): { valid: boolean; cleanName: string; error?: string } {
+  if (typeof name !== 'string') {
+    return { valid: false, cleanName: '', error: 'Display name must be a valid text string.' };
+  }
+  
+  // Strip tags and quotes
+  let clean = name.replace(/<[^>]*>?/gm, '').replace(/[<>"'`]/g, '').trim();
+
+  // Validate whitespace and length
+  if (!clean || clean.length === 0) {
+    return { valid: false, cleanName: '', error: 'Display name cannot be empty or only whitespace.' };
+  }
+
+  if (clean.length < 2) {
+    return { valid: false, cleanName: '', error: 'Display name must be at least 2 characters long.' };
+  }
+
+  if (clean.length > 24) {
+    return { valid: false, cleanName: '', error: 'Display name cannot exceed 24 characters.' };
+  }
+
+  return { valid: true, cleanName: clean };
+}
+
 export async function handleWSMessage(socket: WebSocket, rawData: string): Promise<void> {
   let message: WSClientMessage;
   try {
@@ -60,25 +86,71 @@ export async function handleWSMessage(socket: WebSocket, rawData: string): Promi
   const { action, payload, requestId } = message;
 
   switch (action) {
+    case 'JOIN_WORLD': {
+      const p = (payload || {}) as JoinWorldPayload;
+      const validation = sanitizeDisplayName(p.displayName);
+      if (!validation.valid) {
+        sendWSError(socket, 'INVALID_NAME', validation.error || 'Invalid display name', requestId);
+        return;
+      }
+
+      const cleanName = validation.cleanName;
+      const identity = authService.identifyPlayer(p.playerId, cleanName);
+      const player = await playerService.getOrCreatePlayer(identity.playerId, cleanName);
+
+      const client = gameStateManager.registerClient(socket, player.id, player.displayName);
+      gameStateManager.joinGlobalWorld(client);
+
+      // Get all other active players in global world
+      const activePlayers = gameStateManager.getGlobalActivePlayers(client.playerId);
+
+      // Send WORLD_JOINED to the joining player
+      sendWSMessage<WorldJoinedPayload>(socket, 'WORLD_JOINED', {
+        player,
+        activePlayers,
+      }, requestId);
+
+      // Broadcast PLAYER_JOINED to all other global world players
+      gameStateManager.broadcastToWorld({
+        event: 'PLAYER_JOINED',
+        payload: {
+          sessionId: 'global',
+          player: {
+            id: client.playerId,
+            displayName: client.displayName,
+            role: 'player',
+          },
+        },
+        timestamp: new Date().toISOString(),
+      }, client.playerId);
+
+      // Send recent chat history
+      getChatHistory('global', 50).then((history) => {
+        const historyPayload: ChatHistoryPayload = {
+          messages: history.map((msg) => ({
+            id: msg.id,
+            sessionId: 'global',
+            playerId: msg.player_id,
+            displayName: msg.display_name,
+            content: msg.content,
+            createdAt: msg.created_at,
+          })),
+        };
+        sendWSMessage(socket, 'CHAT_HISTORY', historyPayload);
+      }).catch((err) => {
+        console.warn('[wsRouter] Failed to load chat history:', err);
+      });
+
+      break;
+    }
+
     case 'IDENTIFY': {
       const p = (payload || {}) as IdentifyPayload;
       const identity = authService.identifyPlayer(p.playerId, p.displayName);
       const player = await playerService.getOrCreatePlayer(identity.playerId, identity.displayName);
       
       const client = gameStateManager.registerClient(socket, player.id, player.displayName);
-
-      // If the player already had an active session in DB, restore it in GameStateManager
-      if (player.sessionId) {
-        const session = await sessionService.getSessionStatus(player.sessionId);
-        if (session && session.sessionStatus !== 'closed' && session.sessionStatus !== 'finished') {
-          gameStateManager.joinSessionRoom(player.sessionId, client);
-        } else {
-          // Clear dead session reference
-          await playerService.setPlayerSession(player.id, null);
-          player.sessionId = null;
-          player.connectionStatus = 'online';
-        }
-      }
+      gameStateManager.joinGlobalWorld(client);
 
       sendWSMessage(socket, 'IDENTIFIED', { player }, requestId);
       break;
@@ -229,7 +301,7 @@ export async function handleWSMessage(socket: WebSocket, rawData: string): Promi
 
     case 'UPDATE_STATE': {
       const client = gameStateManager.getClientBySocket(socket);
-      if (client && client.sessionId) {
+      if (client) {
         const p = payload as UpdateStatePayload;
         if (p && p.state) {
           gameStateManager.updatePlayerState(client.playerId, p.state);
@@ -240,8 +312,8 @@ export async function handleWSMessage(socket: WebSocket, rawData: string): Promi
 
     case 'SEND_CHAT_MESSAGE': {
       const client = gameStateManager.getClientBySocket(socket);
-      if (!client || !client.sessionId) {
-        return sendWSError(socket, 'NOT_IN_SESSION', 'You must be in a session to chat', requestId);
+      if (!client) {
+        return sendWSError(socket, 'UNAUTHORIZED', 'You must join the world before chatting', requestId);
       }
 
       // Rate limit (1 message per 500ms)
@@ -260,8 +332,10 @@ export async function handleWSMessage(socket: WebSocket, rawData: string): Promi
       let content = p.content.trim().substring(0, 255);
       content = content.replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+      const targetSession = client.sessionId || 'global';
+
       // Insert into DB asynchronously but don't block
-      insertChatMessage(client.sessionId, client.playerId, client.displayName, content)
+      insertChatMessage(targetSession, client.playerId, client.displayName, content)
         .then(msg => {
           const chatPayload: ChatMessagePayload = {
             id: msg.id,
@@ -272,7 +346,7 @@ export async function handleWSMessage(socket: WebSocket, rawData: string): Promi
             createdAt: msg.created_at
           };
           
-          gameStateManager.broadcastToSession(client.sessionId!, {
+          gameStateManager.broadcastToWorld({
             event: 'CHAT_MESSAGE',
             payload: chatPayload,
             timestamp: new Date().toISOString()
@@ -286,14 +360,14 @@ export async function handleWSMessage(socket: WebSocket, rawData: string): Promi
 
     case 'WEBRTC_SIGNAL': {
       const client = gameStateManager.getClientBySocket(socket);
-      if (!client || !client.sessionId) return;
+      if (!client) return;
       
       const p = payload as WebRTCSignalPayload;
       if (!p.targetId || !p.signal) return;
 
       const targetClient = gameStateManager.getClientByPlayerId(p.targetId);
-      // Ensure target client exists and is in the same session
-      if (targetClient && targetClient.sessionId === client.sessionId && targetClient.socket) {
+      // Route signal to target player socket in global world
+      if (targetClient && targetClient.socket) {
         sendWSMessage(targetClient.socket, 'WEBRTC_SIGNAL', {
           senderId: client.playerId,
           targetId: p.targetId,
@@ -321,20 +395,19 @@ export async function handleWSDisconnect(socket: WebSocket): Promise<void> {
   // Update DB connection status to offline
   await playerService.updateConnectionStatus(client.playerId, 'offline');
 
-  // If player was in a session, notify peers
-  if (client.sessionId) {
-    const result = await sessionService.leaveSession(client.sessionId, client.playerId);
-    gameStateManager.broadcastToSession(
-      client.sessionId,
-      {
-        event: 'PLAYER_LEFT',
-        payload: {
-          sessionId: client.sessionId,
-          playerId: client.playerId,
-          newHostId: result.session?.hostPlayerId || null,
-        },
-        timestamp: new Date().toISOString(),
-      }
-    );
+  // Broadcast PLAYER_LEFT to all other global world clients
+  gameStateManager.broadcastToWorld({
+    event: 'PLAYER_LEFT',
+    payload: {
+      sessionId: 'global',
+      playerId: client.playerId,
+      newHostId: null,
+    },
+    timestamp: new Date().toISOString(),
+  });
+
+  // Also clean up any legacy session memberships if applicable
+  if (client.sessionId && client.sessionId !== 'global') {
+    await sessionService.leaveSession(client.sessionId, client.playerId).catch(() => {});
   }
 }

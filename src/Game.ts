@@ -10,7 +10,8 @@ import { getMTV } from './physics/Collision2D';
 import { UIManager } from './ui/UIManager';
 import { InteractionManager } from './core/InteractionManager';
 import { NetworkManager } from './network/NetworkManager';
-import { LobbyUI } from './ui/LobbyUI';
+import { JoinScreenUI } from './ui/JoinScreenUI';
+import { GlobalWorldHUD } from './ui/GlobalWorldHUD';
 import { ChatUI } from './ui/ChatUI';
 import { RemotePlayerManager } from './entities/RemotePlayerManager';
 import { VoiceManager } from './network/VoiceManager';
@@ -32,7 +33,8 @@ export class Game {
   public uiManager: UIManager;
   public interactionManager: InteractionManager;
   public networkManager: NetworkManager;
-  public lobbyUI: LobbyUI;
+  public joinScreenUI: JoinScreenUI;
+  public worldHUD: GlobalWorldHUD;
   public chatUI: ChatUI;
   public voiceManager: VoiceManager;
   public voiceUI: VoiceUI;
@@ -59,19 +61,18 @@ export class Game {
     this.physics = new SimplePhysics();
     this.uiManager = new UIManager();
 
-    // Networking & Lobby UI
+    // Networking & UI Setup
     this.networkManager = new NetworkManager();
-    this.lobbyUI = new LobbyUI(this.networkManager);
+    this.joinScreenUI = new JoinScreenUI(this.networkManager);
+    this.worldHUD = new GlobalWorldHUD(this.networkManager);
     this.chatUI = new ChatUI(this.networkManager);
     this.voiceManager = new VoiceManager(this.networkManager);
     this.voiceUI = new VoiceUI(this.voiceManager);
     
     // Wire up VoiceUI to player list updates from NetworkManager
+    this.networkManager.on('world_joined', () => this.updateVoiceUI());
     this.networkManager.on('player_joined', () => this.updateVoiceUI());
     this.networkManager.on('player_left', () => this.updateVoiceUI());
-    this.networkManager.on('session_joined', () => this.updateVoiceUI());
-    this.networkManager.on('session_status', () => this.updateVoiceUI());
-    this.networkManager.on('session_created', () => this.updateVoiceUI());
     this.networkManager.on('session_left', () => this.voiceUI.updatePlayerList([]));
     this.networkManager.on('identified', () => this.updateVoiceUI());
 
@@ -120,11 +121,6 @@ export class Game {
   }
 
   private updateVoiceUI() {
-    if (!this.networkManager.currentSession) {
-      this.voiceUI.updatePlayerList([]);
-      return;
-    }
-    const members = this.networkManager.currentSession.members || [];
     const localId = this.networkManager.localPlayer?.id;
     const localName = this.networkManager.localPlayer?.displayName || 'You';
 
@@ -139,19 +135,19 @@ export class Game {
     });
     if (localId) addedIds.add(localId);
 
-    // 2. Add all active remote members from session metadata
-    for (const m of members) {
-      if (m.isActive && m.playerId !== localId && !addedIds.has(m.playerId)) {
+    // 2. Add active world players from NetworkManager
+    for (const [remoteId, remote] of this.networkManager.activeWorldPlayers.entries()) {
+      if (remoteId !== localId && !addedIds.has(remoteId)) {
         list.push({
-          id: m.playerId,
-          name: m.displayName || `Player_${m.playerId.substring(0, 4)}`,
+          id: remoteId,
+          name: remote.displayName || `Player_${remoteId.substring(0, 4)}`,
           isLocal: false
         });
-        addedIds.add(m.playerId);
+        addedIds.add(remoteId);
       }
     }
 
-    // 3. Fallback: Add any spawned remote players from world if missing in members list
+    // 3. Fallback: Add any spawned remote players from world
     if (this.remotePlayerManager) {
       for (const [rpId, rp] of this.remotePlayerManager.getAllPlayers().entries()) {
         if (!addedIds.has(rpId)) {
@@ -245,8 +241,8 @@ export class Game {
 
     this.voiceManager.updateSpatialAudio(listenerPos, listenerForward, speakerPositions);
 
-    // Broadcast local state if in a session
-    if (this.networkManager.isConnected && this.networkManager.currentSession) {
+    // Broadcast local state if in world
+    if (this.networkManager.isConnected && (this.networkManager.isInWorld || this.networkManager.currentSession)) {
       let vehicleState = undefined;
       let seatIndex = undefined;
       let vehicleId = null;

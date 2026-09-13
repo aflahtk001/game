@@ -2,6 +2,7 @@ import { PlayerDTO } from '../players/playerModel.js';
 import { GameSessionDTO } from '../sessions/sessionModel.js';
 
 export type WSClientAction =
+  | 'JOIN_WORLD'
   | 'IDENTIFY'
   | 'CREATE_SESSION'
   | 'JOIN_SESSION'
@@ -13,6 +14,7 @@ export type WSClientAction =
   | 'WEBRTC_SIGNAL';
 
 export type WSServerEvent =
+  | 'WORLD_JOINED'
   | 'IDENTIFIED'
   | 'SESSION_CREATED'
   | 'SESSION_JOINED'
@@ -41,6 +43,15 @@ export interface WSServerMessage<T = unknown> {
 }
 
 // Client Payloads
+export interface JoinWorldPayload {
+  playerId?: string;
+  displayName: string;
+}
+
+export interface WorldJoinedPayload {
+  player: PlayerDTO;
+  activePlayers: Array<{ id: string; displayName: string }>;
+}
 export interface IdentifyPayload {
   playerId?: string;
   displayName?: string;

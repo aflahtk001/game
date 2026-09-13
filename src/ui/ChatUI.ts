@@ -104,21 +104,16 @@ export class ChatUI {
     });
 
     // Network Events
+    this.networkManager.on('world_joined', () => {
+      this.container.style.display = 'flex';
+      this.messageList.innerHTML = '';
+      this.appendSystemMessage('Connected to Global World.');
+    });
+
     this.networkManager.on('session_joined', () => {
       this.container.style.display = 'flex';
       this.messageList.innerHTML = '';
-      this.appendSystemMessage('Joined session.');
-    });
-
-    this.networkManager.on('session_created', () => {
-      this.container.style.display = 'flex';
-      this.messageList.innerHTML = '';
-      this.appendSystemMessage('Session created.');
-    });
-
-    this.networkManager.on('session_left', () => {
-      this.container.style.display = 'none';
-      this.messageList.innerHTML = '';
+      this.appendSystemMessage('Connected to Global World.');
     });
 
     this.networkManager.on('chat_history', (payload: ChatHistoryPayload) => {
@@ -131,11 +126,11 @@ export class ChatUI {
     });
 
     this.networkManager.on('player_joined', (payload) => {
-      this.appendSystemMessage(`${payload.player.displayName} joined the session.`);
+      this.appendSystemMessage(`${payload.player.displayName} joined the world.`);
     });
 
     this.networkManager.on('player_left', (_payload) => {
-      this.appendSystemMessage(`A player left the session.`);
+      this.appendSystemMessage(`A player left the world.`);
     });
   }
 

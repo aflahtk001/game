@@ -14,6 +14,8 @@ export class NetworkManager {
 
   public localPlayer: NetworkPlayer | null = null;
   public currentSession: NetworkGameSession | null = null;
+  public isInWorld: boolean = false;
+  public activeWorldPlayers: Map<string, { id: string; displayName: string }> = new Map();
 
   private listeners: Map<keyof NetworkEventMap, Set<Function>> = new Map();
 
@@ -94,8 +96,13 @@ export class NetworkManager {
       this.emit('connected');
       this.startHeartbeat();
 
-      // Automatically identify player
-      this.identify();
+      // If player was already joined before disconnect, auto-rejoin global world
+      if (this.isInWorld) {
+        const savedName = sessionStorage.getItem('gta_display_name');
+        if (savedName) {
+          this.joinWorld(savedName);
+        }
+      }
     };
 
     this.socket.onmessage = (event) => {
@@ -150,6 +157,58 @@ export class NetworkManager {
     const { event, payload } = msg;
 
     switch (event) {
+      case 'WORLD_JOINED':
+        this.isInWorld = true;
+        this.localPlayer = payload.player;
+        if (this.localPlayer) {
+          sessionStorage.setItem('gta_player_id', this.localPlayer.id);
+          sessionStorage.setItem('gta_display_name', this.localPlayer.displayName);
+        }
+        
+        this.activeWorldPlayers.clear();
+        if (payload.activePlayers && Array.isArray(payload.activePlayers)) {
+          for (const ap of payload.activePlayers) {
+            this.activeWorldPlayers.set(ap.id, ap);
+          }
+        }
+
+        // Setup session representation for compatibility
+        this.currentSession = {
+          id: 'global',
+          sessionStatus: 'active',
+          maxCapacity: 100,
+          hostPlayerId: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          activePlayerCount: this.activeWorldPlayers.size + 1,
+          members: [
+            ...(this.localPlayer ? [{
+              id: this.localPlayer.id,
+              sessionId: 'global',
+              playerId: this.localPlayer.id,
+              displayName: this.localPlayer.displayName,
+              role: 'player' as const,
+              isActive: true,
+              joinedAt: new Date().toISOString(),
+              leftAt: null
+            }] : []),
+            ...Array.from(this.activeWorldPlayers.values()).map(ap => ({
+              id: ap.id,
+              sessionId: 'global',
+              playerId: ap.id,
+              displayName: ap.displayName,
+              role: 'player' as const,
+              isActive: true,
+              joinedAt: new Date().toISOString(),
+              leftAt: null
+            }))
+          ]
+        };
+
+        this.emit('world_joined', payload);
+        this.emit('session_joined', this.currentSession);
+        break;
+
       case 'IDENTIFIED':
         this.localPlayer = payload.player;
         if (this.localPlayer) {
@@ -180,45 +239,49 @@ export class NetworkManager {
         break;
 
       case 'PLAYER_JOINED':
-        if (this.currentSession && this.currentSession.id === payload.sessionId) {
-          this.currentSession.activePlayerCount += 1;
-          if (!this.currentSession.members) {
-            this.currentSession.members = [];
+        if (payload.player) {
+          this.activeWorldPlayers.set(payload.player.id, {
+            id: payload.player.id,
+            displayName: payload.player.displayName
+          });
+
+          if (this.currentSession) {
+            this.currentSession.activePlayerCount = this.activeWorldPlayers.size + 1;
+            if (!this.currentSession.members) this.currentSession.members = [];
+            const existingIdx = this.currentSession.members.findIndex(m => m.playerId === payload.player.id);
+            if (existingIdx >= 0) {
+              this.currentSession.members[existingIdx].isActive = true;
+              this.currentSession.members[existingIdx].displayName = payload.player.displayName;
+            } else {
+              this.currentSession.members.push({
+                id: payload.player.id,
+                sessionId: 'global',
+                playerId: payload.player.id,
+                displayName: payload.player.displayName,
+                role: 'player',
+                isActive: true,
+                joinedAt: new Date().toISOString(),
+                leftAt: null
+              });
+            }
           }
-          const existingIdx = this.currentSession.members.findIndex(m => m.playerId === payload.player.id);
-          if (existingIdx >= 0) {
-            this.currentSession.members[existingIdx].isActive = true;
-            this.currentSession.members[existingIdx].displayName = payload.player.displayName;
-          } else {
-            this.currentSession.members.push({
-              id: payload.player.id,
-              sessionId: payload.sessionId,
-              playerId: payload.player.id,
-              displayName: payload.player.displayName,
-              role: (payload.player.role as any) || 'player',
-              isActive: true,
-              joinedAt: new Date().toISOString(),
-              leftAt: null
-            });
-          }
-          // Fetch full authoritative session status in background
-          this.fetchSessionStatus(payload.sessionId);
         }
         this.emit('player_joined', payload);
         break;
 
       case 'PLAYER_LEFT':
-        if (this.currentSession && this.currentSession.id === payload.sessionId) {
-          this.currentSession.activePlayerCount = Math.max(0, this.currentSession.activePlayerCount - 1);
-          if (this.currentSession.members) {
-            const member = this.currentSession.members.find(m => m.playerId === payload.playerId);
-            if (member) {
-              member.isActive = false;
-              member.leftAt = new Date().toISOString();
+        if (payload.playerId) {
+          this.activeWorldPlayers.delete(payload.playerId);
+          if (this.currentSession) {
+            this.currentSession.activePlayerCount = Math.max(1, this.activeWorldPlayers.size + 1);
+            if (this.currentSession.members) {
+              const member = this.currentSession.members.find(m => m.playerId === payload.playerId);
+              if (member) {
+                member.isActive = false;
+                member.leftAt = new Date().toISOString();
+              }
             }
           }
-          // Fetch full authoritative session status in background
-          this.fetchSessionStatus(payload.sessionId);
         }
         this.emit('player_left', payload);
         break;
@@ -256,7 +319,6 @@ export class NetworkManager {
 
   public send(action: string, payload: unknown = {}): void {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      // console.warn('[NetworkManager] Cannot send message, socket not connected');
       return;
     }
     this.socket.send(JSON.stringify({ action, payload }));
@@ -266,6 +328,7 @@ export class NetworkManager {
   private readonly SEND_INTERVAL_MS = 50; // Max 20 updates per second
 
   public sendPlayerState(state: import('./networkTypes').PlayerStatePayload): void {
+    if (!this.isInWorld && !this.currentSession) return;
     const now = Date.now();
     if (now - this.lastStateSendTime >= this.SEND_INTERVAL_MS) {
       this.send('UPDATE_STATE', { state });
@@ -274,15 +337,29 @@ export class NetworkManager {
   }
 
   public sendChatMessage(content: string): void {
-    if (this.currentSession) {
+    if (this.isInWorld || this.currentSession) {
       this.send('SEND_CHAT_MESSAGE', { content });
     }
   }
 
   public sendWebRTCSignal(targetId: string, signal: any): void {
-    if (this.currentSession) {
+    if (this.isInWorld || this.currentSession) {
       this.send('WEBRTC_SIGNAL', { targetId, signal });
     }
+  }
+
+  public joinWorld(displayName: string): void {
+    const savedId = sessionStorage.getItem('gta_player_id');
+    sessionStorage.setItem('gta_display_name', displayName);
+
+    if (!this.isConnected) {
+      this.connect();
+    }
+
+    this.send('JOIN_WORLD', {
+      playerId: savedId || undefined,
+      displayName: displayName.trim(),
+    });
   }
 
   public identify(displayName?: string): void {
@@ -321,5 +398,6 @@ export class NetworkManager {
       this.socket = null;
     }
     this.state = 'disconnected';
+    this.isInWorld = false;
   }
 }

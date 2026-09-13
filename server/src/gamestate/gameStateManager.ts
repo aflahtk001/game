@@ -16,7 +16,9 @@ export class GameStateManager {
   private clientsBySocket: Map<WebSocket, ConnectedClient> = new Map();
   // Map of playerId -> ConnectedClient
   private clientsByPlayerId: Map<string, ConnectedClient> = new Map();
-  // Map of sessionId -> Set of ConnectedClient
+  // Single Global World Clients Set
+  private globalClients: Set<ConnectedClient> = new Set();
+  // Map of sessionId -> Set of ConnectedClient (for backward compatibility if needed)
   private sessionRooms: Map<string, Set<ConnectedClient>> = new Map();
   // Map of playerId -> PlayerStatePayload
   private playerStates: Map<string, PlayerStatePayload> = new Map();
@@ -27,7 +29,7 @@ export class GameStateManager {
    * Register a new socket connection
    */
   public registerSocket(socket: WebSocket): void {
-    // Initial placeholder until IDENTIFY message is received
+    // Initial placeholder until IDENTIFY/JOIN_WORLD message is received
   }
 
   /**
@@ -49,7 +51,7 @@ export class GameStateManager {
       socket,
       playerId,
       displayName,
-      sessionId: null,
+      sessionId: 'global',
       connectedAt: new Date(),
       lastPingAt: new Date(),
     };
@@ -60,13 +62,62 @@ export class GameStateManager {
   }
 
   /**
+   * Join the single global world
+   */
+  public joinGlobalWorld(client: ConnectedClient): void {
+    client.sessionId = 'global';
+    this.globalClients.add(client);
+  }
+
+  /**
+   * Leave the single global world
+   */
+  public leaveGlobalWorld(client: ConnectedClient): void {
+    this.globalClients.delete(client);
+  }
+
+  /**
+   * Get active players in the global world
+   */
+  public getGlobalActivePlayers(excludePlayerId?: string): Array<{ id: string; displayName: string }> {
+    const list: Array<{ id: string; displayName: string }> = [];
+    for (const client of this.globalClients) {
+      if (excludePlayerId && client.playerId === excludePlayerId) continue;
+      if (client.socket.readyState === WebSocket.OPEN) {
+        list.push({
+          id: client.playerId,
+          displayName: client.displayName,
+        });
+      }
+    }
+    return list;
+  }
+
+  /**
+   * Broadcast message to all active clients in the global world
+   */
+  public broadcastToWorld(message: object, excludePlayerId?: string): void {
+    const payload = JSON.stringify(message);
+    for (const client of this.globalClients) {
+      if (excludePlayerId && client.playerId === excludePlayerId) {
+        continue;
+      }
+      if (client.socket.readyState === WebSocket.OPEN) {
+        client.socket.send(payload);
+      }
+    }
+  }
+
+  /**
    * Unregister socket on disconnect
    */
   public unregisterClient(socket: WebSocket): ConnectedClient | null {
     const client = this.clientsBySocket.get(socket);
     if (!client) return null;
 
-    if (client.sessionId) {
+    this.leaveGlobalWorld(client);
+
+    if (client.sessionId && client.sessionId !== 'global') {
       this.leaveSessionRoom(client.sessionId, client);
     }
 
@@ -85,10 +136,10 @@ export class GameStateManager {
   }
 
   /**
-   * Join a real-time session room
+   * Join a real-time session room (backward compatibility)
    */
   public joinSessionRoom(sessionId: string, client: ConnectedClient): void {
-    if (client.sessionId && client.sessionId !== sessionId) {
+    if (client.sessionId && client.sessionId !== sessionId && client.sessionId !== 'global') {
       this.leaveSessionRoom(client.sessionId, client);
     }
 
@@ -100,10 +151,9 @@ export class GameStateManager {
   }
 
   /**
-   * Leave a real-time session room
+   * Leave a real-time session room (backward compatibility)
    */
   public leaveSessionRoom(sessionId: string, client: ConnectedClient): void {
-    client.sessionId = null;
     const room = this.sessionRooms.get(sessionId);
     if (room) {
       room.delete(client);
@@ -114,9 +164,13 @@ export class GameStateManager {
   }
 
   /**
-   * Broadcast message to all active clients in a session room
+   * Broadcast message to all active clients in a session room (backward compatibility)
    */
   public broadcastToSession(sessionId: string, message: object, excludePlayerId?: string): void {
+    if (sessionId === 'global') {
+      this.broadcastToWorld(message, excludePlayerId);
+      return;
+    }
     const room = this.sessionRooms.get(sessionId);
     if (!room) return;
 
@@ -154,7 +208,29 @@ export class GameStateManager {
     const TICK_MS = 1000 / TICK_RATE;
 
     this.tickInterval = setInterval(() => {
-      // For each active session room, gather all member states and broadcast
+      // 1. Broadcast global world state
+      if (this.globalClients.size > 0) {
+        const worldState: Record<string, PlayerStatePayload> = {};
+        let hasState = false;
+
+        for (const client of this.globalClients) {
+          const state = this.playerStates.get(client.playerId);
+          if (state) {
+            worldState[client.playerId] = state;
+            hasState = true;
+          }
+        }
+
+        if (hasState) {
+          this.broadcastToWorld({
+            event: 'STATE_UPDATE',
+            payload: { players: worldState },
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+
+      // 2. Broadcast any legacy session rooms
       for (const [sessionId, roomClients] of this.sessionRooms.entries()) {
         if (roomClients.size === 0) continue;
 

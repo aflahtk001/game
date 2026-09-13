@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RemotePlayer } from './RemotePlayer';
 import type { NetworkManager } from '../network/NetworkManager';
-import type { StateUpdatePayload, NetworkGameSession } from '../network/networkTypes';
+import type { StateUpdatePayload } from '../network/networkTypes';
 
 export class RemotePlayerManager {
   private scene: THREE.Scene;
@@ -18,6 +18,17 @@ export class RemotePlayerManager {
   }
 
   private bindNetworkEvents() {
+    this.network.on('world_joined', (payload) => {
+      this.clearPlayers();
+      if (payload.activePlayers) {
+        for (const remote of payload.activePlayers) {
+          if (remote.id !== this.network.localPlayer?.id) {
+            this.spawnPlayer(remote.id, remote.displayName);
+          }
+        }
+      }
+    });
+
     this.network.on('player_joined', (payload) => {
       // Don't spawn self
       if (this.network.localPlayer?.id === payload.player.id) return;
@@ -26,19 +37,6 @@ export class RemotePlayerManager {
 
     this.network.on('player_left', (payload) => {
       this.removePlayer(payload.playerId);
-    });
-
-    this.network.on('session_joined', (session: NetworkGameSession) => {
-      // Clear existing first
-      this.clearPlayers();
-      // Spawn all currently active members
-      if (session.members) {
-        for (const member of session.members) {
-          if (member.isActive && member.playerId !== this.network.localPlayer?.id) {
-            this.spawnPlayer(member.playerId, member.displayName || `Player_${member.playerId.substring(0,4)}`);
-          }
-        }
-      }
     });
 
     this.network.on('session_left', () => {
