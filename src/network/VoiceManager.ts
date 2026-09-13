@@ -10,6 +10,8 @@ interface RemoteAudioPipeline {
   analyser: AnalyserNode;
 }
 
+export type MicState = 'disabled' | 'enabled' | 'requesting' | 'denied' | 'error';
+
 export class VoiceManager {
   private networkManager: NetworkManager;
   public config: ProximityVoiceConfig = { ...DEFAULT_PROXIMITY_CONFIG };
@@ -20,7 +22,9 @@ export class VoiceManager {
   private audioNodes: Map<string, RemoteAudioPipeline> = new Map();
 
   public isMicEnabled: boolean = false;
+  public micState: MicState = 'disabled';
   private onSpeakingStateChange?: (playerId: string, isSpeaking: boolean) => void;
+  public onMicStateChanged?: (state: MicState, errorMsg?: string) => void;
 
   // Web Audio Context & Analysers
   private audioContext: AudioContext | null = null;
@@ -42,6 +46,21 @@ export class VoiceManager {
     this.networkManager.on('player_joined', this.handlePlayerJoined.bind(this));
     this.networkManager.on('player_left', this.handlePlayerLeft.bind(this));
     this.networkManager.on('session_left', this.handleSessionLeft.bind(this));
+
+    // Unlock AudioContext on initial touch/click for mobile browsers
+    const unlock = () => {
+      this.unlockAudioContext();
+      window.removeEventListener('click', unlock);
+      window.removeEventListener('touchstart', unlock);
+    };
+    window.addEventListener('click', unlock, { passive: true });
+    window.addEventListener('touchstart', unlock, { passive: true });
+  }
+
+  public unlockAudioContext(): void {
+    if (this.audioContext && this.audioContext.state === 'suspended') {
+      this.audioContext.resume().catch(() => {});
+    }
   }
 
   public setConfig(newConfig: Partial<ProximityVoiceConfig>) {
@@ -66,23 +85,34 @@ export class VoiceManager {
     this.onSpeakingStateChange = cb;
   }
 
-  public async toggleMic(): Promise<boolean> {
+  public async toggleMic(): Promise<MicState> {
     if (this.isMicEnabled) {
       this.muteMic();
-      return false;
+      return 'disabled';
     } else {
-      const success = await this.enableMic();
-      return success;
+      const state = await this.enableMic();
+      return state;
     }
   }
 
-  private async enableMic(): Promise<boolean> {
+  private async enableMic(): Promise<MicState> {
+    this.micState = 'requesting';
+    this.onMicStateChanged?.('requesting');
+
     try {
       this.ensureAudioContext();
+      this.unlockAudioContext();
 
       if (!this.localStream) {
         // Request microphone permission on first enable
-        this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        this.localStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+          video: false,
+        });
         this.setupLocalAnalyser(this.localStream);
       } else {
         // Unmute existing stream
@@ -92,6 +122,8 @@ export class VoiceManager {
       }
 
       this.isMicEnabled = true;
+      this.micState = 'enabled';
+      this.onMicStateChanged?.('enabled');
 
       const audioTrack = this.localStream.getAudioTracks()[0];
       if (audioTrack) {
@@ -114,15 +146,24 @@ export class VoiceManager {
         }
       }
 
-      return true;
-    } catch (error) {
+      return 'enabled';
+    } catch (error: any) {
       console.error('[VoiceManager] Failed to get microphone access:', error);
-      return false;
+      if (error && (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError')) {
+        this.micState = 'denied';
+        this.onMicStateChanged?.('denied', 'Microphone permission was denied.');
+        return 'denied';
+      } else {
+        this.micState = 'error';
+        this.onMicStateChanged?.('error', error?.message || 'Failed to access microphone.');
+        return 'error';
+      }
     }
   }
 
   private muteMic() {
     this.isMicEnabled = false;
+    this.micState = 'disabled';
     if (this.localStream) {
       this.localStream.getAudioTracks().forEach(track => {
         track.enabled = false;
@@ -132,6 +173,7 @@ export class VoiceManager {
     if (this.onSpeakingStateChange) {
       this.onSpeakingStateChange('local', false);
     }
+    this.onMicStateChanged?.('disabled');
   }
 
   private async handleWorldJoined(payload: { activePlayers: Array<{ id: string }> }) {

@@ -13,11 +13,31 @@ export class CameraManager {
     this.camera = new THREE.PerspectiveCamera(75, aspectRatio, 0.1, 1000);
     this.spherical = new THREE.Spherical(6, Math.PI / 3, Math.PI); // distance, phi (polar), theta (azimuth)
 
-    container.addEventListener('click', () => {
-      document.body.requestPointerLock();
+    container.addEventListener('click', (e: MouseEvent) => {
+      // Only request pointer lock on desktop/mouse click
+      if ((e as any).pointerType === 'touch') return;
+      if (!document.pointerLockElement && typeof document.body.requestPointerLock === 'function') {
+        try {
+          const promise = document.body.requestPointerLock() as any;
+          if (promise && typeof promise.catch === 'function') {
+            promise.catch(() => {});
+          }
+        } catch {
+          // Ignore pointer lock rejections
+        }
+      }
     });
 
     document.addEventListener('mousemove', this.onMouseMove.bind(this));
+  }
+
+  public rotate(deltaX: number, deltaY: number, sensitivity: number = 0.002) {
+    this.spherical.theta -= deltaX * sensitivity;
+    this.spherical.phi -= deltaY * sensitivity;
+
+    // Clamp phi to prevent going upside down or under ground
+    const epsilon = 0.1;
+    this.spherical.phi = Math.max(epsilon, Math.min(Math.PI / 2 - epsilon, this.spherical.phi));
   }
 
   private onMouseMove(event: MouseEvent) {
@@ -26,14 +46,7 @@ export class CameraManager {
     const movementX = event.movementX || 0;
     const movementY = event.movementY || 0;
 
-    const sensitivity = 0.002;
-
-    this.spherical.theta -= movementX * sensitivity;
-    this.spherical.phi -= movementY * sensitivity;
-
-    // Clamp phi to prevent going upside down or under ground
-    const epsilon = 0.1;
-    this.spherical.phi = Math.max(epsilon, Math.min(Math.PI / 2 - epsilon, this.spherical.phi));
+    this.rotate(movementX, movementY, 0.002);
   }
 
   public resize(aspectRatio: number) {

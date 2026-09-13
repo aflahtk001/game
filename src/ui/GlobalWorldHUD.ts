@@ -27,10 +27,11 @@ export class GlobalWorldHUD {
 
   private render(): void {
     Object.assign(this.container.style, {
-      position: 'absolute',
-      top: '15px',
-      left: '15px',
-      width: '240px',
+      position: 'fixed',
+      top: 'calc(12px + env(safe-area-inset-top, 0px))',
+      left: 'calc(12px + env(safe-area-inset-left, 0px))',
+      width: '220px',
+      maxWidth: 'calc(100vw - 24px)',
       backgroundColor: 'rgba(15, 18, 26, 0.85)',
       color: '#f8fafc',
       borderRadius: '10px',
@@ -44,6 +45,11 @@ export class GlobalWorldHUD {
       transition: 'all 0.2s ease',
       userSelect: 'none',
       overflow: 'hidden'
+    });
+
+    window.addEventListener('resize', () => {
+      this.container.style.top = 'calc(12px + env(safe-area-inset-top, 0px))';
+      this.container.style.left = 'calc(12px + env(safe-area-inset-left, 0px))';
     });
 
     this.container.innerHTML = `

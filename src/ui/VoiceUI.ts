@@ -1,4 +1,4 @@
-import { VoiceManager } from '../network/VoiceManager';
+import { VoiceManager, type MicState } from '../network/VoiceManager';
 
 export interface VoicePlayerInfo {
   id: string;
@@ -14,8 +14,11 @@ export class VoiceUI {
   private container: HTMLDivElement;
   private headerBar: HTMLDivElement;
   private micBtn: HTMLButtonElement;
+  private toggleListBtn: HTMLButtonElement;
   private playerList: HTMLDivElement;
+  private errorToast: HTMLDivElement;
 
+  private isListExpanded: boolean = false;
   private players: Map<string, VoicePlayerInfo> = new Map();
   private playerElements: Map<string, HTMLDivElement> = new Map();
 
@@ -25,23 +28,29 @@ export class VoiceUI {
     this.headerBar = document.createElement('div');
     this.playerList = document.createElement('div');
     this.micBtn = document.createElement('button');
+    this.toggleListBtn = document.createElement('button');
+    this.errorToast = document.createElement('div');
 
     this.createUI();
 
     this.voiceManager.setSpeakingStateCallback((playerId: string, isSpeaking: boolean) => {
       this.updateSpeakingState(playerId, isSpeaking);
     });
+
+    this.voiceManager.onMicStateChanged = (state: MicState, errorMsg?: string) => {
+      this.updateMicButtonState(state, errorMsg);
+    };
   }
 
   private createUI() {
     this.container.id = 'voice-ui';
-    this.container.style.position = 'absolute';
-    this.container.style.top = '12px';
-    this.container.style.right = '12px';
+    this.container.style.position = 'fixed';
+    this.container.style.top = 'calc(12px + env(safe-area-inset-top, 0px))';
+    this.container.style.right = 'calc(12px + env(safe-area-inset-right, 0px))';
     this.container.style.display = 'flex';
     this.container.style.flexDirection = 'column';
     this.container.style.alignItems = 'flex-end';
-    this.container.style.gap = '8px';
+    this.container.style.gap = '6px';
     this.container.style.pointerEvents = 'none';
     this.container.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace';
     this.container.style.zIndex = '1000';
@@ -49,58 +58,148 @@ export class VoiceUI {
     // Header bar with toggle
     this.headerBar.style.display = 'flex';
     this.headerBar.style.alignItems = 'center';
-    this.headerBar.style.gap = '8px';
+    this.headerBar.style.gap = '6px';
     this.headerBar.style.pointerEvents = 'auto';
 
-    this.micBtn.textContent = '🎙️ Mic: OFF';
-    this.micBtn.style.padding = '8px 14px';
-    this.micBtn.style.backgroundColor = 'rgba(239, 68, 68, 0.9)';
-    this.micBtn.style.color = '#ffffff';
-    this.micBtn.style.border = '1px solid rgba(255, 255, 255, 0.2)';
-    this.micBtn.style.borderRadius = '6px';
-    this.micBtn.style.cursor = 'pointer';
-    this.micBtn.style.fontWeight = 'bold';
-    this.micBtn.style.fontSize = '12px';
-    this.micBtn.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.3)';
-    this.micBtn.style.transition = 'all 0.2s ease';
+    // Mic Button
+    this.micBtn.textContent = '🔇 Mic: OFF';
+    Object.assign(this.micBtn.style, {
+      padding: '8px 14px',
+      backgroundColor: 'rgba(239, 68, 68, 0.9)',
+      color: '#ffffff',
+      border: '1px solid rgba(255, 255, 255, 0.2)',
+      borderRadius: '8px',
+      cursor: 'pointer',
+      fontWeight: '700',
+      fontSize: '12px',
+      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
+      backdropFilter: 'blur(8px)',
+      transition: 'all 0.15s ease',
+      userSelect: 'none',
+      webkitUserSelect: 'none',
+      touchAction: 'none'
+    });
 
     this.micBtn.onclick = async () => {
-      const isNowEnabled = await this.voiceManager.toggleMic();
-      this.updateLocalMicButton(isNowEnabled);
+      await this.voiceManager.toggleMic();
+    };
+
+    // Toggle Player List Button
+    this.toggleListBtn.innerHTML = '👥';
+    Object.assign(this.toggleListBtn.style, {
+      padding: '8px 10px',
+      backgroundColor: 'rgba(15, 23, 42, 0.85)',
+      color: '#ffffff',
+      border: '1px solid rgba(255, 255, 255, 0.2)',
+      borderRadius: '8px',
+      cursor: 'pointer',
+      fontSize: '12px',
+      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
+      backdropFilter: 'blur(8px)',
+      userSelect: 'none',
+      webkitUserSelect: 'none',
+      touchAction: 'none'
+    });
+
+    this.toggleListBtn.onclick = () => {
+      this.isListExpanded = !this.isListExpanded;
+      this.playerList.style.display = this.isListExpanded ? 'flex' : 'none';
+      this.toggleListBtn.style.borderColor = this.isListExpanded ? '#6366f1' : 'rgba(255, 255, 255, 0.2)';
     };
 
     this.headerBar.appendChild(this.micBtn);
+    this.headerBar.appendChild(this.toggleListBtn);
+
+    // Error Toast
+    Object.assign(this.errorToast.style, {
+      display: 'none',
+      fontSize: '11px',
+      color: '#fca5a5',
+      backgroundColor: 'rgba(127, 29, 29, 0.9)',
+      padding: '6px 10px',
+      borderRadius: '6px',
+      border: '1px solid rgba(239, 68, 68, 0.4)',
+      maxWidth: '220px',
+      textAlign: 'right',
+      pointerEvents: 'none'
+    });
 
     // Player List Container
-    this.playerList.style.display = 'flex';
-    this.playerList.style.flexDirection = 'column';
-    this.playerList.style.gap = '4px';
-    this.playerList.style.minWidth = '240px';
+    const isMobile = window.innerWidth <= 768 || ('ontouchstart' in window);
+    this.isListExpanded = !isMobile; // Open by default on desktop, collapsed on mobile
+
+    Object.assign(this.playerList.style, {
+      display: this.isListExpanded ? 'flex' : 'none',
+      flexDirection: 'column',
+      gap: '4px',
+      minWidth: '200px',
+      maxWidth: '280px',
+      pointerEvents: 'auto',
+      maxHeight: '160px',
+      overflowY: 'auto'
+    });
 
     this.container.appendChild(this.headerBar);
+    this.container.appendChild(this.errorToast);
     this.container.appendChild(this.playerList);
     document.body.appendChild(this.container);
+
+    window.addEventListener('resize', () => {
+      this.container.style.top = 'calc(12px + env(safe-area-inset-top, 0px))';
+      this.container.style.right = 'calc(12px + env(safe-area-inset-right, 0px))';
+    });
   }
 
-  public updateLocalMicButton(isEnabled: boolean) {
-    if (isEnabled) {
-      this.micBtn.textContent = '🎙️ Mic: ON';
-      this.micBtn.style.backgroundColor = 'rgba(34, 197, 94, 0.9)';
-      this.micBtn.style.color = '#ffffff';
-    } else {
-      this.micBtn.textContent = '🔇 Mic: OFF';
-      this.micBtn.style.backgroundColor = 'rgba(239, 68, 68, 0.9)';
-      this.micBtn.style.color = '#ffffff';
-      this.micBtn.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.3)';
+  public updateMicButtonState(state: MicState, errorMsg?: string) {
+    switch (state) {
+      case 'enabled':
+        this.micBtn.textContent = '🎙️ Mic: ON';
+        this.micBtn.style.backgroundColor = 'rgba(34, 197, 94, 0.95)';
+        this.micBtn.style.color = '#ffffff';
+        this.errorToast.style.display = 'none';
+        this.setPlayerMicStatus('local', true);
+        break;
+      case 'disabled':
+        this.micBtn.textContent = '🔇 Mic: OFF';
+        this.micBtn.style.backgroundColor = 'rgba(239, 68, 68, 0.9)';
+        this.micBtn.style.color = '#ffffff';
+        this.errorToast.style.display = 'none';
+        this.setPlayerMicStatus('local', false);
+        break;
+      case 'requesting':
+        this.micBtn.textContent = '⏳ Requesting...';
+        this.micBtn.style.backgroundColor = 'rgba(234, 179, 8, 0.95)';
+        this.micBtn.style.color = '#ffffff';
+        this.errorToast.style.display = 'none';
+        break;
+      case 'denied':
+        this.micBtn.textContent = '🚫 Mic Denied';
+        this.micBtn.style.backgroundColor = 'rgba(185, 28, 28, 0.95)';
+        this.micBtn.style.color = '#ffffff';
+        this.showErrorToast(errorMsg || 'Microphone access was blocked. Please enable in browser settings.');
+        this.setPlayerMicStatus('local', false);
+        break;
+      case 'error':
+        this.micBtn.textContent = '⚠️ Voice Error';
+        this.micBtn.style.backgroundColor = 'rgba(185, 28, 28, 0.95)';
+        this.micBtn.style.color = '#ffffff';
+        this.showErrorToast(errorMsg || 'Voice connection failed.');
+        this.setPlayerMicStatus('local', false);
+        break;
     }
+  }
 
-    this.setPlayerMicStatus('local', isEnabled);
+  private showErrorToast(msg: string) {
+    this.errorToast.textContent = msg;
+    this.errorToast.style.display = 'block';
+    setTimeout(() => {
+      this.errorToast.style.display = 'none';
+    }, 5000);
   }
 
   public updatePlayerList(playerList: { id: string; name: string; isLocal?: boolean }[]) {
     const currentIds = new Set(playerList.map(p => p.id));
 
-    // Add or update players
     for (const p of playerList) {
       if (!this.players.has(p.id)) {
         this.players.set(p.id, {
@@ -120,11 +219,12 @@ export class VoiceUI {
       this.renderPlayerRow(p.id);
     }
 
-    // Remove obsolete players
-    for (const [id, row] of this.playerElements.entries()) {
+    // Remove obsolete
+    for (const id of this.players.keys()) {
       if (!currentIds.has(id)) {
-        if (row.parentElement) {
-          row.parentElement.removeChild(row);
+        const el = this.playerElements.get(id);
+        if (el && el.parentNode) {
+          el.parentNode.removeChild(el);
         }
         this.playerElements.delete(id);
         this.players.delete(id);
@@ -132,150 +232,79 @@ export class VoiceUI {
     }
   }
 
+  public setPlayerMicStatus(playerId: string, isMicOn: boolean, name?: string) {
+    let p = this.players.get(playerId);
+    if (!p) {
+      p = { id: playerId, name: name || playerId, isMicOn, isSpeaking: false, isLocal: playerId === 'local' };
+      this.players.set(playerId, p);
+    } else {
+      p.isMicOn = isMicOn;
+      if (name) p.name = name;
+    }
+    this.renderPlayerRow(playerId);
+  }
+
+  public updateSpeakingState(playerId: string, isSpeaking: boolean, name?: string) {
+    let p = this.players.get(playerId);
+    if (!p) {
+      p = { id: playerId, name: name || playerId, isMicOn: true, isSpeaking, isLocal: playerId === 'local' };
+      this.players.set(playerId, p);
+    } else {
+      p.isSpeaking = isSpeaking;
+      if (name) p.name = name;
+    }
+    this.renderPlayerRow(playerId);
+  }
+
   public setPlayerDistance(playerId: string, distance: number) {
     const p = this.players.get(playerId);
     if (p) {
-      // Only re-render if distance changed by > 0.5m to avoid DOM spam
-      if (p.distance === undefined || Math.abs(p.distance - distance) > 0.5) {
-        p.distance = distance;
-        this.renderPlayerRow(playerId);
-      }
-    }
-  }
-
-  public setPlayerMicStatus(playerId: string, isMicOn: boolean, displayName?: string) {
-    let p = this.players.get(playerId);
-    if (!p) {
-      this.players.set(playerId, {
-        id: playerId,
-        name: displayName || (playerId === 'local' ? 'You' : `Player_${playerId.substring(0, 4)}`),
-        isLocal: playerId === 'local',
-        isMicOn: isMicOn,
-        isSpeaking: false
-      });
-      p = this.players.get(playerId);
-    }
-    if (p) {
-      p.isMicOn = isMicOn;
-      if (displayName && p.name.startsWith('Player_') && !displayName.startsWith('Player_')) {
-        p.name = displayName;
-      }
+      p.distance = distance;
       this.renderPlayerRow(playerId);
     }
   }
 
-  public updateSpeakingState(playerId: string, isSpeaking: boolean, displayName?: string) {
-    const targetId = playerId === 'local' ? 'local' : playerId;
-    let p = this.players.get(targetId);
-    if (!p) {
-      this.players.set(targetId, {
-        id: targetId,
-        name: displayName || (targetId === 'local' ? 'You' : `Player_${targetId.substring(0, 4)}`),
-        isLocal: targetId === 'local',
-        isMicOn: targetId === 'local' ? this.voiceManager.isMicEnabled : isSpeaking,
-        isSpeaking: isSpeaking
-      });
-      p = this.players.get(targetId);
-    }
-    if (p) {
-      p.isSpeaking = isSpeaking;
-      if (isSpeaking && targetId !== 'local') {
-        p.isMicOn = true;
-      }
-      if (displayName && p.name.startsWith('Player_') && !displayName.startsWith('Player_')) {
-        p.name = displayName;
-      }
-      this.renderPlayerRow(targetId);
-    }
-
-    if (targetId === 'local') {
-      if (isSpeaking && this.voiceManager.isMicEnabled) {
-        this.micBtn.style.boxShadow = '0 0 12px 2px #22c55e';
-      } else {
-        this.micBtn.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.3)';
-      }
-    }
-  }
-
   private renderPlayerRow(playerId: string) {
-    const data = this.players.get(playerId);
-    if (!data) return;
+    const p = this.players.get(playerId);
+    if (!p) return;
 
-    let row = this.playerElements.get(playerId);
-    if (!row) {
-      row = document.createElement('div');
-      row.style.display = 'flex';
-      row.style.alignItems = 'center';
-      row.style.justifyContent = 'space-between';
-      row.style.gap = '8px';
-      row.style.backgroundColor = 'rgba(15, 23, 42, 0.85)';
-      row.style.backdropFilter = 'blur(6px)';
-      row.style.padding = '5px 10px';
-      row.style.borderRadius = '6px';
-      row.style.border = '1px solid rgba(255, 255, 255, 0.1)';
-      row.style.color = '#f8fafc';
-      row.style.fontSize = '12px';
-      row.style.transition = 'all 0.15s ease';
-
-      this.playerList.appendChild(row);
-      this.playerElements.set(playerId, row);
+    let el = this.playerElements.get(playerId);
+    if (!el) {
+      el = document.createElement('div');
+      Object.assign(el.style, {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '4px 8px',
+        backgroundColor: 'rgba(15, 23, 42, 0.85)',
+        border: '1px solid rgba(255, 255, 255, 0.1)',
+        borderRadius: '6px',
+        fontSize: '11px',
+        color: '#f8fafc',
+        backdropFilter: 'blur(6px)'
+      });
+      this.playerList.appendChild(el);
+      this.playerElements.set(playerId, el);
     }
 
-    const isOutOfRange = !data.isLocal && data.distance !== undefined && data.distance > this.voiceManager.config.maxDistance;
+    const isSpeaking = p.isSpeaking;
+    const isMicOn = p.isMicOn;
+    const distText = p.distance !== undefined && !p.isLocal ? ` (${Math.round(p.distance)}m)` : '';
 
-    // Styling based on speaking and range
-    if (data.isSpeaking && !isOutOfRange) {
-      row.style.border = '1px solid #22c55e';
-      row.style.boxShadow = '0 0 8px rgba(34, 197, 94, 0.4)';
-    } else {
-      row.style.border = '1px solid rgba(255, 255, 255, 0.1)';
-      row.style.boxShadow = 'none';
-    }
-
-    const micIcon = data.isMicOn ? '🎙️' : '🔇';
-    const micBadgeStyle = data.isMicOn
-      ? 'background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.4);'
-      : 'background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4);';
-    const micText = data.isMicOn ? 'ON' : 'OFF';
-
-    let distanceBadge = '';
-    if (!data.isLocal && data.distance !== undefined) {
-      if (data.distance <= this.voiceManager.config.maxDistance) {
-        distanceBadge = `<span style="color:#38bdf8; font-size:10px; margin-left:3px;">(${Math.round(data.distance)}m)</span>`;
-      } else {
-        distanceBadge = `<span style="color:#ef4444; font-size:10px; margin-left:3px;">(>25m)</span>`;
-      }
-    }
-
-    let speakingBadge = '';
-    if (isOutOfRange) {
-      speakingBadge = '<span style="color:#64748b; font-size:10px;">OUT OF RANGE</span>';
-    } else if (data.isSpeaking) {
-      speakingBadge = '<span style="color:#4ade80; font-weight:bold; font-size:10px;">🔊 SPEAKING</span>';
-    } else {
-      speakingBadge = '<span style="color:#64748b; font-size:10px;">IDLE</span>';
-    }
-
-    const localTag = data.isLocal ? ' <span style="color:#38bdf8; font-size:10px;">(You)</span>' : '';
-
-    row.innerHTML = `
-      <div style="display:flex; align-items:center; gap:6px;">
-        <span style="padding:2px 5px; border-radius:4px; font-size:10px; font-weight:bold; ${micBadgeStyle}">
-          ${micIcon} ${micText}
-        </span>
-        <span style="font-weight:600; color:#e2e8f0; max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-          ${data.name}${localTag}${distanceBadge}
-        </span>
+    el.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+        <span style="
+          width: 7px; height: 7px; border-radius: 50%; display: inline-block;
+          background-color: ${isSpeaking ? '#22c55e' : (isMicOn ? '#3b82f6' : '#64748b')};
+          box-shadow: ${isSpeaking ? '0 0 8px #22c55e' : 'none'};
+        "></span>
+        <span style="font-weight: 600;">${p.name}${p.isLocal ? ' (You)' : ''}</span>
       </div>
-      <div>
-        ${speakingBadge}
+      <div style="font-size: 10px; color: #94a3b8; margin-left: 8px;">
+        ${isSpeaking ? '🔊 Speaking' : (isMicOn ? '🎙️ Ready' : '🔇 Muted')}${distText}
       </div>
     `;
-  }
 
-  public destroy() {
-    if (this.container && this.container.parentElement) {
-      this.container.parentElement.removeChild(this.container);
-    }
+    el.style.borderColor = isSpeaking ? 'rgba(34, 197, 94, 0.6)' : 'rgba(255, 255, 255, 0.1)';
   }
 }

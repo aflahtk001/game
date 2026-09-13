@@ -16,6 +16,8 @@ import { ChatUI } from './ui/ChatUI';
 import { RemotePlayerManager } from './entities/RemotePlayerManager';
 import { VoiceManager } from './network/VoiceManager';
 import { VoiceUI } from './ui/VoiceUI';
+import { MobileControlsUI } from './ui/MobileControlsUI';
+import { GraphicsSettingsManager } from './core/GraphicsSettingsManager';
 
 export class Game {
   private container: HTMLElement;
@@ -39,6 +41,8 @@ export class Game {
   public voiceManager: VoiceManager;
   public voiceUI: VoiceUI;
   public remotePlayerManager: RemotePlayerManager;
+  public mobileControlsUI: MobileControlsUI;
+  public graphicsSettings: GraphicsSettingsManager;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -48,7 +52,6 @@ export class Game {
     
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.container.appendChild(this.renderer.domElement);
@@ -58,8 +61,10 @@ export class Game {
     // Systems
     this.inputManager = new InputManager();
     this.cameraManager = new CameraManager(window.innerWidth / window.innerHeight, this.container);
+    this.graphicsSettings = new GraphicsSettingsManager(this.renderer, this.cameraManager.camera);
     this.physics = new SimplePhysics();
     this.uiManager = new UIManager();
+    this.mobileControlsUI = new MobileControlsUI(this.inputManager, this.cameraManager);
 
     // Networking & UI Setup
     this.networkManager = new NetworkManager();
@@ -68,6 +73,15 @@ export class Game {
     this.chatUI = new ChatUI(this.networkManager);
     this.voiceManager = new VoiceManager(this.networkManager);
     this.voiceUI = new VoiceUI(this.voiceManager);
+
+    // Wire MobileControlsUI to HUD prompt and Chat UI state
+    this.uiManager.onPromptChanged = (promptText) => {
+      this.mobileControlsUI.setNearbyVehicle(promptText);
+    };
+
+    this.chatUI.onChatStateChanged = (isOpen) => {
+      this.mobileControlsUI.setChatting(isOpen);
+    };
     
     // Wire up VoiceUI to player list updates from NetworkManager
     this.networkManager.on('world_joined', () => this.updateVoiceUI());
@@ -113,6 +127,9 @@ export class Game {
     );
 
     window.addEventListener('resize', this.onWindowResize.bind(this));
+    window.addEventListener('orientationchange', () => {
+      setTimeout(() => this.onWindowResize(), 100);
+    });
   }
 
   private onWindowResize() {
@@ -190,7 +207,7 @@ export class Game {
     // Resolve Collisions between entities
     this.resolveCollisions();
 
-    // Update Camera & HUD
+    // Update Camera, HUD & Mobile Controls
     if (isDriving && currentVehicle) {
       const isPassenger = this.player.seatIndex !== 0;
 
@@ -215,10 +232,17 @@ export class Game {
       // Passengers: dead-zone small synced speeds to avoid idle vibration
       const rawSpeed = (currentVehicle as any).speed as number;
       const displaySpeed = !isPassenger ? rawSpeed : (Math.abs(rawSpeed) < 1.0 ? 0 : rawSpeed);
-      this.uiManager.updateHUD(displaySpeed);
+      const vehicleTitle = currentVehicle.constructor.name.toUpperCase();
+      this.uiManager.updateHUD(displaySpeed, vehicleTitle, isPassenger);
+
+      // Update mobile controls driving mode
+      this.mobileControlsUI.setDrivingMode(true, currentVehicle);
     } else {
       this.cameraManager.update(this.player.mesh.position, delta);
       this.uiManager.setHUDVisible(false);
+
+      // Update mobile controls walking mode
+      this.mobileControlsUI.setDrivingMode(false, null);
     }
 
     // Multiplayer update
@@ -285,7 +309,8 @@ export class Game {
       });
     }
 
-    // Render
+    // Render & Stats
+    this.graphicsSettings.update();
     this.renderer.render(this.scene, this.cameraManager.camera);
   }
 

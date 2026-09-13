@@ -3,6 +3,7 @@ import { BaseVehicle } from './vehicles/BaseVehicle';
 import { Car } from './vehicles/Car';
 import { Truck } from './vehicles/Truck';
 import { Bus } from './vehicles/Bus';
+import { Motorcycle } from './vehicles/Motorcycle';
 import { SimplePhysics } from '../physics/SimplePhysics';
 import { InputManager } from '../core/InputManager';
 import { CameraManager } from '../core/CameraManager';
@@ -13,8 +14,9 @@ export class VehicleManager {
   constructor(scene: THREE.Scene) {
     // Spawn test vehicles with fixed IDs so they sync easily across clients
     this.vehicles.push(new Car(scene, new THREE.Vector3(5, 5, -10), 'car_1'));
+    this.vehicles.push(new Motorcycle(scene, new THREE.Vector3(0, 5, -10), 'moto_1'));
     this.vehicles.push(new Truck(scene, new THREE.Vector3(10, 5, -10), 'truck_1'));
-    this.vehicles.push(new Bus(scene, new THREE.Vector3(-5, 5, -10), 'bus_1'));
+    this.vehicles.push(new Bus(scene, new THREE.Vector3(-8, 5, -10), 'bus_1'));
   }
 
   public getVehicles(): BaseVehicle[] {
