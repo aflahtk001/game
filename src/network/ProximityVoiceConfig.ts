@@ -16,10 +16,10 @@ export interface ProximityVoiceConfig {
 }
 
 export const DEFAULT_PROXIMITY_CONFIG: ProximityVoiceConfig = {
-  minDistance: 5.0,   // 0 to 5 meters: full volume
-  maxDistance: 25.0,  // beyond 25 meters: inaudible
+  minDistance: 15.0,  // 0 to 15 meters: full volume
+  maxDistance: 150.0, // audible up to 150 meters with smooth falloff
   rolloffFactor: 1.0,
-  minVolume: 0.0,
+  minVolume: 0.1,     // subtle audible presence at edge of range
   maxVolume: 1.0,
   globalVolume: 1.0,
   spatialAudioEnabled: true
